@@ -1,0 +1,503 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "app_name": "Voice Prompt Tool",
+    "log_level": "INFO",
+    "history_limit": 100,
+    "paths": {
+        "logs_dir": "logs",
+        "history_file": "data/history.json",
+        "temp_dir": "temp",
+        "models_dir": "models",
+    },
+    "tray": {
+        "tooltip": "Voice Prompt Tool",
+        "startup_notification": True,
+    },
+    "notifications": {
+        "enabled": True,
+        "backend": "log",
+    },
+    "hotkey": {
+        "combination": "ctrl+win",
+    },
+    "audio": {
+        "sample_rate": 16000,
+        "channels": 1,
+        "block_frames": 1024,
+        "max_record_seconds": 120,
+        "min_duration_seconds": 0.35,
+        "stale_temp_file_age_hours": 24,
+        "file_prefix": "recording",
+    },
+    "transcription": {
+        "model_size": "tiny",
+        "language_mode": "auto",
+        "cpu_threads": 0,
+        "beam_size": 1,
+        "best_of": 1,
+        "condition_on_previous_text": False,
+        "without_timestamps": True,
+        "vad_filter": False,
+    },
+    "text_postprocess": {
+        "auto_copy": True,
+        "auto_paste": True,
+        "custom_replacements": {},
+    },
+}
+
+
+class ConfigError(RuntimeError):
+    """Raised when the application configuration is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class PathsConfig:
+    root_dir: Path
+    config_file: Path
+    logs_dir: Path
+    data_dir: Path
+    history_file: Path
+    temp_dir: Path
+    models_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
+class TrayConfig:
+    tooltip: str
+    startup_notification: bool
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationsConfig:
+    enabled: bool
+    backend: str
+
+
+@dataclass(frozen=True, slots=True)
+class HotkeyConfig:
+    combination: str
+    tokens: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AudioConfig:
+    sample_rate: int
+    channels: int
+    block_frames: int
+    max_record_seconds: int
+    min_duration_seconds: float
+    stale_temp_file_age_hours: int
+    file_prefix: str
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptionConfig:
+    model_size: str
+    language_mode: str
+    cpu_threads: int
+    beam_size: int
+    best_of: int
+    condition_on_previous_text: bool
+    without_timestamps: bool
+    vad_filter: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TextPostprocessConfig:
+    auto_copy: bool
+    auto_paste: bool
+    custom_replacements: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AppConfig:
+    app_name: str
+    log_level: str
+    history_limit: int
+    paths: PathsConfig
+    tray: TrayConfig
+    notifications: NotificationsConfig
+    hotkey: HotkeyConfig
+    audio: AudioConfig
+    transcription: TranscriptionConfig
+    text_postprocess: TextPostprocessConfig
+
+    @property
+    def app_slug(self) -> str:
+        return self.app_name.strip().lower().replace(" ", "_")
+
+
+def load_config(config_path: Path | None = None) -> AppConfig:
+    root_dir = Path(__file__).resolve().parent.parent
+    resolved_config_path = config_path or root_dir / "config.json"
+    raw_config = _read_json_object(resolved_config_path) if resolved_config_path.exists() else {}
+    merged_config = _merge_dicts(DEFAULT_CONFIG, raw_config)
+    _normalize_legacy_values(merged_config, raw_config)
+
+    if not resolved_config_path.exists():
+        _write_json(resolved_config_path, merged_config)
+
+    return _build_config(
+        root_dir=root_dir,
+        config_path=resolved_config_path,
+        merged_config=merged_config,
+    )
+
+
+def ensure_runtime_paths(config: AppConfig) -> None:
+    config.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+    config.paths.data_dir.mkdir(parents=True, exist_ok=True)
+    config.paths.temp_dir.mkdir(parents=True, exist_ok=True)
+    config.paths.models_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_history_file(config.paths.history_file)
+
+
+def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, Any]) -> AppConfig:
+    paths = _as_object(merged_config["paths"], "paths")
+    tray = _as_object(merged_config["tray"], "tray")
+    notifications = _as_object(merged_config["notifications"], "notifications")
+    hotkey = _as_object(merged_config["hotkey"], "hotkey")
+    audio = _as_object(merged_config["audio"], "audio")
+    transcription = _as_object(merged_config["transcription"], "transcription")
+    text_postprocess = _as_object(merged_config["text_postprocess"], "text_postprocess")
+
+    history_path = _resolve_path(root_dir, _as_non_empty_string(paths["history_file"], "paths.history_file"))
+    hotkey_combination = _as_non_empty_string(hotkey["combination"], "hotkey.combination")
+
+    return AppConfig(
+        app_name=_as_non_empty_string(merged_config["app_name"], "app_name"),
+        log_level=_parse_log_level(merged_config["log_level"]),
+        history_limit=_as_positive_int(merged_config["history_limit"], "history_limit"),
+        paths=PathsConfig(
+            root_dir=root_dir,
+            config_file=config_path,
+            logs_dir=_resolve_path(root_dir, _as_non_empty_string(paths["logs_dir"], "paths.logs_dir")),
+            data_dir=history_path.parent,
+            history_file=history_path,
+            temp_dir=_resolve_path(root_dir, _as_non_empty_string(paths["temp_dir"], "paths.temp_dir")),
+            models_dir=_resolve_path(
+                root_dir,
+                _as_non_empty_string(paths["models_dir"], "paths.models_dir"),
+            ),
+        ),
+        tray=TrayConfig(
+            tooltip=_as_non_empty_string(tray["tooltip"], "tray.tooltip"),
+            startup_notification=_as_bool(tray["startup_notification"], "tray.startup_notification"),
+        ),
+        notifications=NotificationsConfig(
+            enabled=_as_bool(notifications["enabled"], "notifications.enabled"),
+            backend=_parse_notification_backend(notifications["backend"]),
+        ),
+        hotkey=HotkeyConfig(
+            combination=hotkey_combination,
+            tokens=_parse_hotkey_combination(hotkey_combination),
+        ),
+        audio=AudioConfig(
+            sample_rate=_as_positive_int(audio["sample_rate"], "audio.sample_rate"),
+            channels=_parse_audio_channels(audio["channels"]),
+            block_frames=_as_positive_int(audio["block_frames"], "audio.block_frames"),
+            max_record_seconds=_as_positive_int(audio["max_record_seconds"], "audio.max_record_seconds"),
+            min_duration_seconds=_as_non_negative_float(
+                audio["min_duration_seconds"],
+                "audio.min_duration_seconds",
+            ),
+            stale_temp_file_age_hours=_as_non_negative_int(
+                audio["stale_temp_file_age_hours"],
+                "audio.stale_temp_file_age_hours",
+            ),
+            file_prefix=_as_non_empty_string(audio["file_prefix"], "audio.file_prefix"),
+        ),
+        transcription=TranscriptionConfig(
+            model_size=_parse_model_size(transcription["model_size"]),
+            language_mode=_parse_language_mode(transcription["language_mode"]),
+            cpu_threads=_as_non_negative_int(transcription["cpu_threads"], "transcription.cpu_threads"),
+            beam_size=_as_positive_int(transcription["beam_size"], "transcription.beam_size"),
+            best_of=_as_positive_int(transcription["best_of"], "transcription.best_of"),
+            condition_on_previous_text=_as_bool(
+                transcription["condition_on_previous_text"],
+                "transcription.condition_on_previous_text",
+            ),
+            without_timestamps=_as_bool(
+                transcription["without_timestamps"],
+                "transcription.without_timestamps",
+            ),
+            vad_filter=_as_bool(transcription["vad_filter"], "transcription.vad_filter"),
+        ),
+        text_postprocess=TextPostprocessConfig(
+            auto_copy=_as_bool(text_postprocess["auto_copy"], "text_postprocess.auto_copy"),
+            auto_paste=_as_bool(text_postprocess["auto_paste"], "text_postprocess.auto_paste"),
+            custom_replacements=_parse_custom_replacements(
+                text_postprocess["custom_replacements"]
+            ),
+        ),
+    )
+
+
+def _ensure_history_file(history_path: Path) -> None:
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    default_payload = {"entries": []}
+
+    if not history_path.exists():
+        _write_json(history_path, default_payload)
+        return
+
+    try:
+        with history_path.open("r", encoding="utf-8") as handle:
+            existing_payload = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        _backup_and_reset(history_path, default_payload)
+        return
+
+    if isinstance(existing_payload, list):
+        _write_json(history_path, {"entries": existing_payload})
+        return
+
+    if not isinstance(existing_payload, dict) or not isinstance(existing_payload.get("entries"), list):
+        _backup_and_reset(history_path, default_payload)
+
+
+def _backup_and_reset(history_path: Path, payload: dict[str, Any]) -> None:
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_path = history_path.with_name(f"{history_path.stem}.backup-{timestamp}{history_path.suffix}")
+    try:
+        history_path.replace(backup_path)
+    except OSError:
+        pass
+    _write_json(history_path, payload)
+
+
+def _normalize_legacy_values(merged_config: dict[str, Any], raw_config: dict[str, Any]) -> None:
+    raw_audio = raw_config.get("audio")
+    merged_audio = merged_config.get("audio")
+
+    if not isinstance(raw_audio, dict) or not isinstance(merged_audio, dict):
+        return
+
+    if "max_record_seconds" not in raw_audio and "max_duration_seconds" in raw_audio:
+        merged_audio["max_record_seconds"] = raw_audio["max_duration_seconds"]
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Invalid JSON in configuration file: {path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Unable to read configuration file: {path}") from exc
+
+    if not isinstance(payload, dict):
+        raise ConfigError(f"Configuration file must contain a JSON object: {path}")
+
+    return payload
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+
+
+def _resolve_path(root_dir: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    return path if path.is_absolute() else root_dir / path
+
+
+def _merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+
+    for key, value in override.items():
+        if key not in merged:
+            merged[key] = value
+            continue
+
+        if isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_dicts(merged[key], value)
+            continue
+
+        merged[key] = value
+
+    return merged
+
+
+def _as_object(value: Any, field_name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ConfigError(f"Configuration field '{field_name}' must be an object.")
+    return value
+
+
+def _as_non_empty_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"Configuration field '{field_name}' must be a non-empty string.")
+    return value.strip()
+
+
+def _as_bool(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"Configuration field '{field_name}' must be a boolean.")
+    return value
+
+
+def _as_positive_int(value: Any, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ConfigError(f"Configuration field '{field_name}' must be a positive integer.")
+    return value
+
+
+def _as_non_negative_int(value: Any, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ConfigError(f"Configuration field '{field_name}' must be a non-negative integer.")
+    return value
+
+
+def _as_non_negative_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) < 0:
+        raise ConfigError(f"Configuration field '{field_name}' must be a non-negative number.")
+    return float(value)
+
+
+def _parse_log_level(value: Any) -> str:
+    normalized = _as_non_empty_string(value, "log_level").upper()
+    if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ConfigError(
+            "Configuration field 'log_level' must be DEBUG, INFO, WARNING, ERROR, or CRITICAL."
+        )
+    return normalized
+
+
+def _parse_notification_backend(value: Any) -> str:
+    normalized = _as_non_empty_string(value, "notifications.backend").lower()
+    if normalized not in {"log"}:
+        raise ConfigError("Configuration field 'notifications.backend' must be 'log'.")
+    return normalized
+
+
+def _parse_audio_channels(value: Any) -> int:
+    channels = _as_positive_int(value, "audio.channels")
+    if channels != 1:
+        raise ConfigError("Configuration field 'audio.channels' must be 1 for this MVP.")
+    return channels
+
+
+def _parse_model_size(value: Any) -> str:
+    return _as_non_empty_string(value, "transcription.model_size")
+
+
+def _parse_language_mode(value: Any) -> str:
+    normalized = _as_non_empty_string(value, "transcription.language_mode").lower()
+    if normalized not in {"auto", "ru", "en"}:
+        raise ConfigError(
+            "Configuration field 'transcription.language_mode' must be 'auto', 'ru', or 'en'."
+        )
+    return normalized
+
+
+def _parse_custom_replacements(value: Any) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, dict):
+        raise ConfigError(
+            "Configuration field 'text_postprocess.custom_replacements' must be an object."
+        )
+
+    normalized_items: list[tuple[str, str]] = []
+
+    for raw_source, raw_target in value.items():
+        if not isinstance(raw_source, str) or not raw_source.strip():
+            raise ConfigError(
+                "Replacement keys in 'text_postprocess.custom_replacements' must be non-empty strings."
+            )
+
+        if not isinstance(raw_target, str) or not raw_target.strip():
+            raise ConfigError(
+                "Replacement values in 'text_postprocess.custom_replacements' must be non-empty strings."
+            )
+
+        normalized_items.append((raw_source.strip(), raw_target.strip()))
+
+    normalized_items.sort(key=lambda item: len(item[0]), reverse=True)
+    return tuple(normalized_items)
+
+
+def _parse_hotkey_combination(combination: str) -> tuple[str, ...]:
+    token_map = {
+        "ctrl": "ctrl",
+        "control": "ctrl",
+        "alt": "alt",
+        "shift": "shift",
+        "win": "win",
+        "windows": "win",
+        "super": "win",
+        "cmd": "win",
+        "left_ctrl": "left_ctrl",
+        "leftcontrol": "left_ctrl",
+        "lctrl": "left_ctrl",
+        "right_ctrl": "right_ctrl",
+        "rctrl": "right_ctrl",
+        "left_alt": "left_alt",
+        "lalt": "left_alt",
+        "right_alt": "right_alt",
+        "ralt": "right_alt",
+        "left_shift": "left_shift",
+        "lshift": "left_shift",
+        "right_shift": "right_shift",
+        "rshift": "right_shift",
+        "left_win": "left_win",
+        "left_windows": "left_win",
+        "lwin": "left_win",
+        "left_cmd": "left_win",
+        "right_win": "right_win",
+        "right_windows": "right_win",
+        "rwin": "right_win",
+        "right_cmd": "right_win",
+    }
+    supported_tokens = {
+        "ctrl",
+        "alt",
+        "shift",
+        "win",
+        "left_ctrl",
+        "right_ctrl",
+        "left_alt",
+        "right_alt",
+        "left_shift",
+        "right_shift",
+        "left_win",
+        "right_win",
+    }
+
+    raw_tokens = [part.strip().lower().replace(" ", "_") for part in combination.split("+")]
+    filtered_tokens = [token for token in raw_tokens if token]
+
+    if not filtered_tokens:
+        raise ConfigError("Configuration field 'hotkey.combination' must not be empty.")
+
+    normalized_tokens: list[str] = []
+
+    for token in filtered_tokens:
+        normalized_token = token_map.get(token, token)
+
+        if normalized_token in normalized_tokens:
+            continue
+
+        if normalized_token in supported_tokens:
+            normalized_tokens.append(normalized_token)
+            continue
+
+        if len(normalized_token) == 1 and normalized_token.isprintable():
+            normalized_tokens.append(normalized_token)
+            continue
+
+        raise ConfigError(
+            f"Unsupported hotkey token '{token}' in configuration field 'hotkey.combination'."
+        )
+
+    return tuple(normalized_tokens)
