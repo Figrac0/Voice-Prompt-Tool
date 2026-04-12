@@ -100,7 +100,7 @@ class HistoryService:
             return ()
 
         entries_data = self._extract_entries(payload)
-        entries = tuple(self._normalize_entries(entries_data))
+        entries = tuple(self._deduplicate_entries(self._normalize_entries(entries_data)))
         trimmed_entries = entries[-self._limit :]
 
         if payload != {"entries": [asdict(item) for item in trimmed_entries]}:
@@ -153,6 +153,16 @@ class HistoryService:
             )
 
         return normalized_entries
+
+    def _deduplicate_entries(self, entries: list[HistoryEntry]) -> list[HistoryEntry]:
+        deduplicated_entries: list[HistoryEntry] = []
+
+        for entry in entries:
+            if deduplicated_entries and self._is_duplicate_entry(deduplicated_entries[-1], entry):
+                continue
+            deduplicated_entries.append(entry)
+
+        return deduplicated_entries
 
     def _recover_corrupted_history_locked(self, exc: Exception) -> None:
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")

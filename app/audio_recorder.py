@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 import time
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Event, RLock, Thread
+from threading import Event, Lock, RLock, Thread
 from uuid import uuid4
 
 import sounddevice as sd
@@ -44,6 +44,8 @@ class _RecordingSession:
     frames_captured: int = 0
     error: Exception | None = None
     max_duration_reached: bool = False
+    buffer_lock: Lock = field(default_factory=Lock)
+    audio_buffer: bytearray = field(default_factory=bytearray)
 
 
 class AudioRecorder:
@@ -183,6 +185,48 @@ class AudioRecorder:
     def delete_recording_file(self, file_path: Path) -> None:
         self._delete_file_if_exists(file_path)
 
+    def create_snapshot(self, max_duration_seconds: float | None = None) -> RecordingArtifact | None:
+        with self._lock:
+            session = self._active_session
+            if session is None:
+                return None
+
+        with session.buffer_lock:
+            total_frames = session.frames_captured
+            if total_frames <= 0 or not session.audio_buffer:
+                return None
+
+            audio_bytes = bytes(session.audio_buffer)
+
+        selected_frames = total_frames
+        selected_bytes = audio_bytes
+
+        if max_duration_seconds is not None and max_duration_seconds > 0:
+            max_frames = int(self._config.sample_rate * max_duration_seconds)
+            if max_frames > 0 and total_frames > max_frames:
+                bytes_per_frame = self._sample_width_bytes * self._config.channels
+                selected_frames = max_frames
+                selected_bytes = audio_bytes[-(max_frames * bytes_per_frame) :]
+
+        if selected_frames <= 0 or not selected_bytes:
+            return None
+
+        snapshot_path = self._temp_dir / (
+            f"{self._config.file_prefix}-live-{time.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.wav"
+        )
+        try:
+            self._write_wav_file(snapshot_path, selected_bytes)
+        except OSError as exc:
+            raise AudioRecorderError("Unable to write a live preview audio snapshot.") from exc
+
+        return RecordingArtifact(
+            file_path=snapshot_path,
+            duration_seconds=selected_frames / float(self._config.sample_rate),
+            sample_rate=self._config.sample_rate,
+            channels=self._config.channels,
+            frame_count=selected_frames,
+        )
+
     def _create_session(self) -> _RecordingSession:
         self._temp_dir.mkdir(parents=True, exist_ok=True)
         file_name = f"{self._config.file_prefix}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.wav"
@@ -253,7 +297,9 @@ class AudioRecorder:
                             self._logger.warning("Audio input overflow detected while recording.")
 
                         wav_handle.writeframes(data)
-                        session.frames_captured += len(data) // bytes_per_frame
+                        with session.buffer_lock:
+                            session.audio_buffer.extend(data)
+                            session.frames_captured += len(data) // bytes_per_frame
         except Exception as exc:
             session.error = exc
             ready_event.set()
@@ -280,3 +326,11 @@ class AudioRecorder:
                 self._logger.info("Temporary audio file removed: %s", file_path)
         except OSError:
             self._logger.exception("Unable to remove temporary audio file: %s", file_path)
+
+    def _write_wav_file(self, file_path: Path, audio_bytes: bytes) -> None:
+        self._temp_dir.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(file_path), "wb") as wav_handle:
+            wav_handle.setnchannels(self._config.channels)
+            wav_handle.setsampwidth(self._sample_width_bytes)
+            wav_handle.setframerate(self._config.sample_rate)
+            wav_handle.writeframes(audio_bytes)

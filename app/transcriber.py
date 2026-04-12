@@ -5,6 +5,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Iterable
 
 from faster_whisper import WhisperModel
@@ -47,6 +48,7 @@ class LocalTranscriber:
         self._config = config
         self._models_dir = models_dir
         self._logger = logger
+        self._lock = RLock()
         self._model: WhisperModel | None = None
         self._last_result: TranscriptionResult | None = None
 
@@ -55,37 +57,40 @@ class LocalTranscriber:
         return self._last_result
 
     def load_model(self) -> None:
-        if self._model is not None:
-            return
+        with self._lock:
+            if self._model is not None:
+                return
 
-        self._models_dir.mkdir(parents=True, exist_ok=True)
-        started_at = time.perf_counter()
-        cpu_threads = self._config.cpu_threads
+            self._models_dir.mkdir(parents=True, exist_ok=True)
+            started_at = time.perf_counter()
+            cpu_threads = self._config.cpu_threads
 
-        if cpu_threads <= 0:
-            cpu_threads = max(1, min(os.cpu_count() or 4, 8))
+            if cpu_threads <= 0:
+                cpu_threads = max(1, min(os.cpu_count() or 4, 8))
 
-        try:
-            self._model = WhisperModel(
+            try:
+                self._model = WhisperModel(
+                    self._config.model_size,
+                    device=self._config.device,
+                    compute_type=self._config.compute_type,
+                    cpu_threads=cpu_threads,
+                    download_root=str(self._models_dir),
+                )
+            except Exception as exc:
+                raise TranscriberError(
+                    f"Unable to load faster-whisper model '{self._config.model_size}'."
+                ) from exc
+
+            duration_seconds = time.perf_counter() - started_at
+            self._logger.info(
+                "Model loaded | engine=faster-whisper | model=%s | device=%s | compute_type=%s | cpu_threads=%s | seconds=%.3f | models_dir=%s",
                 self._config.model_size,
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=cpu_threads,
-                download_root=str(self._models_dir),
+                self._config.device,
+                self._config.compute_type,
+                cpu_threads,
+                duration_seconds,
+                self._models_dir,
             )
-        except Exception as exc:
-            raise TranscriberError(
-                f"Unable to load faster-whisper model '{self._config.model_size}'."
-            ) from exc
-
-        duration_seconds = time.perf_counter() - started_at
-        self._logger.info(
-            "Model loaded | engine=faster-whisper | model=%s | cpu_threads=%s | seconds=%.3f | models_dir=%s",
-            self._config.model_size,
-            cpu_threads,
-            duration_seconds,
-            self._models_dir,
-        )
 
     def transcribe(self, audio_path: Path) -> TranscriptionResult:
         if self._model is None:
@@ -100,7 +105,7 @@ class LocalTranscriber:
         requested_language = None if self._config.language_mode == "auto" else self._config.language_mode
         started_at = time.perf_counter()
         self._logger.info(
-            "Transcription started | audio=%s | model=%s | language_mode=%s | beam_size=%s | best_of=%s | without_timestamps=%s | vad_filter=%s",
+            "Transcription started | audio=%s | model=%s | language_mode=%s | beam_size=%s | best_of=%s | without_timestamps=%s | vad_filter=%s | condition_on_previous_text=%s",
             audio_path,
             self._config.model_size,
             self._config.language_mode,
@@ -108,6 +113,7 @@ class LocalTranscriber:
             self._config.best_of,
             self._config.without_timestamps,
             self._config.vad_filter,
+            self._config.condition_on_previous_text,
         )
 
         try:
@@ -120,7 +126,10 @@ class LocalTranscriber:
                 condition_on_previous_text=self._config.condition_on_previous_text,
                 without_timestamps=self._config.without_timestamps,
                 vad_filter=self._config.vad_filter,
-                temperature=0.0,
+                initial_prompt=self._config.initial_prompt or None,
+                hotwords=self._config.hotwords or None,
+                language_detection_segments=self._config.language_detection_segments,
+                temperature=[0.0, 0.2, 0.4],
             )
             segments = tuple(self._collect_segments(segments_iterable))
         except Exception as exc:

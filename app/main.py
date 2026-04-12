@@ -5,9 +5,10 @@ from pathlib import Path
 
 from app.audio_recorder import AudioRecorder, AudioRecorderError
 from app.clipboard_service import ClipboardService, ClipboardServiceError
-from app.config import ConfigError, ensure_runtime_paths, load_config
+from app.config import ConfigError, TranscriptionConfig, ensure_runtime_paths, load_config
 from app.history_service import HistoryService, HistoryServiceError
 from app.hotkeys import GlobalHotkeyManager, HotkeyRegistrationError
+from app.live_preview import LivePreviewError, LivePreviewService
 from app.logger import build_emergency_logger, configure_logging
 from app.notifications import NotificationManager
 from app.processing_worker import BackgroundProcessingWorker, ProcessingJob, ProcessingOutcome
@@ -66,6 +67,34 @@ def main() -> None:
             config=config.text_postprocess,
             logger=logger,
         )
+        preview_transcriber = LocalTranscriber(
+            config=TranscriptionConfig(
+                model_size=config.live_preview.model_size,
+                language_mode=config.live_preview.language_mode,
+                device=config.live_preview.device,
+                compute_type=config.live_preview.compute_type,
+                cpu_threads=config.transcription.cpu_threads,
+                beam_size=config.live_preview.beam_size,
+                best_of=config.live_preview.best_of,
+                condition_on_previous_text=config.live_preview.condition_on_previous_text,
+                without_timestamps=config.live_preview.without_timestamps,
+                vad_filter=config.live_preview.vad_filter,
+                initial_prompt=config.transcription.initial_prompt,
+                hotwords=config.transcription.hotwords,
+                language_detection_segments=config.transcription.language_detection_segments,
+            ),
+            models_dir=config.paths.models_dir,
+            logger=logger,
+        )
+        live_preview_service = LivePreviewService(
+            config=config.live_preview,
+            audio_recorder=audio_recorder,
+            transcriber=preview_transcriber,
+            text_postprocessor=text_postprocessor,
+            text_injector=text_injector,
+            clipboard_service=clipboard_service,
+            logger=logger,
+        )
         previous_history_entries = history_service.ensure_ready()
         audio_recorder.cleanup_stale_files()
 
@@ -108,21 +137,40 @@ def main() -> None:
                             notifier.error(config.app_name, "Clipboard copy failed")
                             completion_detail = "Clipboard copy failed. Ready."
                         else:
-                            if config.text_postprocess.auto_copy:
-                                notifier.info(config.app_name, "Text copied to clipboard")
-
                             if config.text_postprocess.auto_paste:
                                 try:
-                                    text_injector.paste_from_clipboard()
-                                except TextInjectorError:
-                                    logger.exception("Active window paste failed.")
-                                    notifier.error(config.app_name, "Text paste failed")
-                                    completion_detail = "Text paste failed. Ready."
+                                    live_preview_replaced = live_preview_service.apply_final_text(
+                                        postprocess_result.cleaned_text
+                                    )
+                                except LivePreviewError:
+                                    live_preview_replaced = False
+                                    logger.exception("Live preview finalization failed.")
+                                    notifier.error(config.app_name, "Live text update failed")
+                                    completion_detail = "Live text update failed. Ready."
                                 else:
-                                    notifier.info(config.app_name, "Text pasted into active field")
+                                    if live_preview_replaced:
+                                        notifier.info(config.app_name, "Text pasted into active field")
+
+                                if not live_preview_replaced:
+                                    try:
+                                        text_injector.paste_from_clipboard()
+                                    except TextInjectorError:
+                                        logger.exception("Active window paste failed.")
+                                        notifier.error(config.app_name, "Text paste failed")
+                                        completion_detail = "Text paste failed. Ready."
+                                    else:
+                                        notifier.info(config.app_name, "Text pasted into active field")
+
+                            if config.text_postprocess.auto_copy:
+                                notifier.info(config.app_name, "Text copied to clipboard")
                     else:
                         logger.info("Clipboard copy and auto-paste are disabled by configuration.")
                 else:
+                    if config.text_postprocess.auto_paste and live_preview_service.enabled:
+                        try:
+                            live_preview_service.apply_final_text("")
+                        except LivePreviewError:
+                            logger.exception("Unable to discard empty live preview text.")
                     logger.info("Cleaned text is empty. Clipboard copy skipped.")
                     notifier.warning(config.app_name, "Recognized text is empty. Clipboard not updated")
                     completion_detail = "Recognized text is empty. Ready."
@@ -191,6 +239,8 @@ def main() -> None:
 
         def handle_recording_start() -> bool:
             if not state_store.start_recording("Hotkey is held. Recording microphone audio."):
+                if state_store.snapshot().state is AppState.TRANSCRIBING:
+                    notifier.warning(config.app_name, "Wait until the previous dictation is finalized")
                 return False
 
             try:
@@ -201,10 +251,16 @@ def main() -> None:
                 notifier.error(config.app_name, "Recording failed to start")
                 return False
 
+            if config.text_postprocess.auto_paste and live_preview_service.enabled:
+                live_preview_service.start_session()
+
             notifier.info(config.app_name, "Recording started")
             return True
 
         def handle_recording_stop() -> bool:
+            if config.text_postprocess.auto_paste and live_preview_service.enabled:
+                live_preview_service.stop_session(discard_preview=False)
+
             try:
                 recording_result = audio_recorder.stop_recording()
             except AudioRecorderError as exc:
@@ -217,6 +273,12 @@ def main() -> None:
                 if state_store.snapshot().state is AppState.RECORDING:
                     state_store.finish_recording("Hotkey released. Recording ignored.")
 
+                if config.text_postprocess.auto_paste and live_preview_service.enabled:
+                    try:
+                        live_preview_service.apply_final_text("")
+                    except LivePreviewError:
+                        logger.exception("Unable to discard ignored live preview text.")
+
                 if recording_result.reason == "short_recording":
                     notifier.warning(config.app_name, "Short recording ignored")
 
@@ -226,6 +288,11 @@ def main() -> None:
             if artifact is None:
                 if state_store.snapshot().state is AppState.RECORDING:
                     state_store.finish_recording("Hotkey released. No recording artifact available.")
+                if config.text_postprocess.auto_paste and live_preview_service.enabled:
+                    try:
+                        live_preview_service.apply_final_text("")
+                    except LivePreviewError:
+                        logger.exception("Unable to discard empty live preview text.")
                 notifier.warning(config.app_name, "Empty recording ignored")
                 return False
 
@@ -261,6 +328,7 @@ def main() -> None:
                 notifier.error(config.app_name, "Transcription model failed to load")
                 return
 
+            live_preview_service.warm_up_async()
             processing_worker.start()
 
             try:
@@ -273,6 +341,7 @@ def main() -> None:
 
         def stop_runtime() -> None:
             hotkey_manager.stop()
+            live_preview_service.stop_session(discard_preview=False)
 
             try:
                 audio_recorder.stop_recording()

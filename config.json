@@ -29,14 +29,34 @@
     "file_prefix": "recording"
   },
   "transcription": {
-    "model_size": "tiny",
-    "language_mode": "auto",
+    "model_size": "small",
+    "language_mode": "ru",
+    "device": "auto",
+    "compute_type": "default",
     "cpu_threads": 0,
+    "beam_size": 5,
+    "best_of": 5,
+    "condition_on_previous_text": false,
+    "without_timestamps": false,
+    "vad_filter": true,
+    "initial_prompt": "Это русская диктовка. Точно распознавай слова. Сохраняй естественную пунктуацию. Не добавляй слов, которых нет в аудио.",
+    "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
+    "language_detection_segments": 3
+  },
+  "live_preview": {
+    "enabled": true,
+    "model_size": "tiny",
+    "language_mode": "ru",
+    "device": "auto",
+    "compute_type": "default",
     "beam_size": 1,
     "best_of": 1,
     "condition_on_previous_text": false,
     "without_timestamps": true,
-    "vad_filter": false
+    "vad_filter": false,
+    "update_interval_seconds": 1.0,
+    "min_audio_seconds": 1.0,
+    "max_preview_window_seconds": 8.0
   },
   "text_postprocess": {
     "auto_copy": true,

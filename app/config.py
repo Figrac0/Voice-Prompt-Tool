@@ -38,14 +38,37 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "file_prefix": "recording",
     },
     "transcription": {
-        "model_size": "tiny",
-        "language_mode": "auto",
+        "model_size": "small",
+        "language_mode": "ru",
+        "device": "auto",
+        "compute_type": "default",
         "cpu_threads": 0,
+        "beam_size": 5,
+        "best_of": 5,
+        "condition_on_previous_text": False,
+        "without_timestamps": False,
+        "vad_filter": True,
+        "initial_prompt": (
+            "Это русская диктовка. Точно распознавай слова. "
+            "Сохраняй естественную пунктуацию. Не добавляй слов, которых нет в аудио."
+        ),
+        "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
+        "language_detection_segments": 3,
+    },
+    "live_preview": {
+        "enabled": True,
+        "model_size": "tiny",
+        "language_mode": "ru",
+        "device": "auto",
+        "compute_type": "default",
         "beam_size": 1,
         "best_of": 1,
         "condition_on_previous_text": False,
         "without_timestamps": True,
         "vad_filter": False,
+        "update_interval_seconds": 1.0,
+        "min_audio_seconds": 1.0,
+        "max_preview_window_seconds": 8.0,
     },
     "text_postprocess": {
         "auto_copy": True,
@@ -103,12 +126,34 @@ class AudioConfig:
 class TranscriptionConfig:
     model_size: str
     language_mode: str
+    device: str
+    compute_type: str
     cpu_threads: int
     beam_size: int
     best_of: int
     condition_on_previous_text: bool
     without_timestamps: bool
     vad_filter: bool
+    initial_prompt: str
+    hotwords: str
+    language_detection_segments: int
+
+
+@dataclass(frozen=True, slots=True)
+class LivePreviewConfig:
+    enabled: bool
+    model_size: str
+    language_mode: str
+    device: str
+    compute_type: str
+    beam_size: int
+    best_of: int
+    condition_on_previous_text: bool
+    without_timestamps: bool
+    vad_filter: bool
+    update_interval_seconds: float
+    min_audio_seconds: float
+    max_preview_window_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +174,7 @@ class AppConfig:
     hotkey: HotkeyConfig
     audio: AudioConfig
     transcription: TranscriptionConfig
+    live_preview: LivePreviewConfig
     text_postprocess: TextPostprocessConfig
 
     @property
@@ -168,6 +214,7 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
     hotkey = _as_object(merged_config["hotkey"], "hotkey")
     audio = _as_object(merged_config["audio"], "audio")
     transcription = _as_object(merged_config["transcription"], "transcription")
+    live_preview = _as_object(merged_config["live_preview"], "live_preview")
     text_postprocess = _as_object(merged_config["text_postprocess"], "text_postprocess")
 
     history_path = _resolve_path(root_dir, _as_non_empty_string(paths["history_file"], "paths.history_file"))
@@ -217,8 +264,10 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
             file_prefix=_as_non_empty_string(audio["file_prefix"], "audio.file_prefix"),
         ),
         transcription=TranscriptionConfig(
-            model_size=_parse_model_size(transcription["model_size"]),
-            language_mode=_parse_language_mode(transcription["language_mode"]),
+            model_size=_parse_model_size(transcription["model_size"], "transcription.model_size"),
+            language_mode=_parse_language_mode(transcription["language_mode"], "transcription.language_mode"),
+            device=_as_non_empty_string(transcription["device"], "transcription.device"),
+            compute_type=_as_non_empty_string(transcription["compute_type"], "transcription.compute_type"),
             cpu_threads=_as_non_negative_int(transcription["cpu_threads"], "transcription.cpu_threads"),
             beam_size=_as_positive_int(transcription["beam_size"], "transcription.beam_size"),
             best_of=_as_positive_int(transcription["best_of"], "transcription.best_of"),
@@ -231,13 +280,47 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
                 "transcription.without_timestamps",
             ),
             vad_filter=_as_bool(transcription["vad_filter"], "transcription.vad_filter"),
+            initial_prompt=_as_string(transcription["initial_prompt"], "transcription.initial_prompt"),
+            hotwords=_as_string(transcription["hotwords"], "transcription.hotwords"),
+            language_detection_segments=_as_positive_int(
+                transcription["language_detection_segments"],
+                "transcription.language_detection_segments",
+            ),
+        ),
+        live_preview=LivePreviewConfig(
+            enabled=_as_bool(live_preview["enabled"], "live_preview.enabled"),
+            model_size=_parse_model_size(live_preview["model_size"], "live_preview.model_size"),
+            language_mode=_parse_language_mode(live_preview["language_mode"], "live_preview.language_mode"),
+            device=_as_non_empty_string(live_preview["device"], "live_preview.device"),
+            compute_type=_as_non_empty_string(live_preview["compute_type"], "live_preview.compute_type"),
+            beam_size=_as_positive_int(live_preview["beam_size"], "live_preview.beam_size"),
+            best_of=_as_positive_int(live_preview["best_of"], "live_preview.best_of"),
+            condition_on_previous_text=_as_bool(
+                live_preview["condition_on_previous_text"],
+                "live_preview.condition_on_previous_text",
+            ),
+            without_timestamps=_as_bool(
+                live_preview["without_timestamps"],
+                "live_preview.without_timestamps",
+            ),
+            vad_filter=_as_bool(live_preview["vad_filter"], "live_preview.vad_filter"),
+            update_interval_seconds=_as_positive_float(
+                live_preview["update_interval_seconds"],
+                "live_preview.update_interval_seconds",
+            ),
+            min_audio_seconds=_as_positive_float(
+                live_preview["min_audio_seconds"],
+                "live_preview.min_audio_seconds",
+            ),
+            max_preview_window_seconds=_as_positive_float(
+                live_preview["max_preview_window_seconds"],
+                "live_preview.max_preview_window_seconds",
+            ),
         ),
         text_postprocess=TextPostprocessConfig(
             auto_copy=_as_bool(text_postprocess["auto_copy"], "text_postprocess.auto_copy"),
             auto_paste=_as_bool(text_postprocess["auto_paste"], "text_postprocess.auto_paste"),
-            custom_replacements=_parse_custom_replacements(
-                text_postprocess["custom_replacements"]
-            ),
+            custom_replacements=_parse_custom_replacements(text_postprocess["custom_replacements"]),
         ),
     )
 
@@ -279,11 +362,19 @@ def _normalize_legacy_values(merged_config: dict[str, Any], raw_config: dict[str
     raw_audio = raw_config.get("audio")
     merged_audio = merged_config.get("audio")
 
-    if not isinstance(raw_audio, dict) or not isinstance(merged_audio, dict):
-        return
+    if isinstance(raw_audio, dict) and isinstance(merged_audio, dict):
+        if "max_record_seconds" not in raw_audio and "max_duration_seconds" in raw_audio:
+            merged_audio["max_record_seconds"] = raw_audio["max_duration_seconds"]
 
-    if "max_record_seconds" not in raw_audio and "max_duration_seconds" in raw_audio:
-        merged_audio["max_record_seconds"] = raw_audio["max_duration_seconds"]
+    raw_transcription = raw_config.get("transcription")
+    merged_transcription = merged_config.get("transcription")
+    raw_live_preview = raw_config.get("live_preview")
+    merged_live_preview = merged_config.get("live_preview")
+
+    if isinstance(raw_transcription, dict) and isinstance(merged_transcription, dict):
+        if "model_size" in raw_transcription and not isinstance(raw_live_preview, dict):
+            if isinstance(merged_live_preview, dict):
+                merged_live_preview["language_mode"] = merged_transcription.get("language_mode", "ru")
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -342,6 +433,12 @@ def _as_non_empty_string(value: Any, field_name: str) -> str:
     return value.strip()
 
 
+def _as_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ConfigError(f"Configuration field '{field_name}' must be a string.")
+    return value.strip()
+
+
 def _as_bool(value: Any, field_name: str) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(f"Configuration field '{field_name}' must be a boolean.")
@@ -363,6 +460,12 @@ def _as_non_negative_int(value: Any, field_name: str) -> int:
 def _as_non_negative_float(value: Any, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) < 0:
         raise ConfigError(f"Configuration field '{field_name}' must be a non-negative number.")
+    return float(value)
+
+
+def _as_positive_float(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0:
+        raise ConfigError(f"Configuration field '{field_name}' must be a positive number.")
     return float(value)
 
 
@@ -389,16 +492,14 @@ def _parse_audio_channels(value: Any) -> int:
     return channels
 
 
-def _parse_model_size(value: Any) -> str:
-    return _as_non_empty_string(value, "transcription.model_size")
+def _parse_model_size(value: Any, field_name: str) -> str:
+    return _as_non_empty_string(value, field_name)
 
 
-def _parse_language_mode(value: Any) -> str:
-    normalized = _as_non_empty_string(value, "transcription.language_mode").lower()
+def _parse_language_mode(value: Any, field_name: str) -> str:
+    normalized = _as_non_empty_string(value, field_name).lower()
     if normalized not in {"auto", "ru", "en"}:
-        raise ConfigError(
-            "Configuration field 'transcription.language_mode' must be 'auto', 'ru', or 'en'."
-        )
+        raise ConfigError(f"Configuration field '{field_name}' must be 'auto', 'ru', or 'en'.")
     return normalized
 
 
