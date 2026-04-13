@@ -4,7 +4,7 @@ Windows-only background диктовка для личного использо�
 
 Текущий MVP умеет:
 
-- глобальный hotkey `Ctrl + Win`
+- глобальный hotkey `Ctrl + Shift`
 - запись микрофона, пока hotkey удерживается
 - быстрый live preview в активном текстовом поле во время речи
 - финальную локальную транскрибацию через `faster-whisper` после отпускания hotkey
@@ -51,7 +51,7 @@ run.bat
 ## Режим работы
 
 1. Наведи фокус на текстовое поле.
-2. Зажми `Ctrl + Win`.
+2. Зажми `Ctrl + Shift`.
 3. Пока говоришь, приложение пишет микрофон и периодически обновляет черновой текст прямо в активном поле.
 4. Отпусти hotkey.
 5. Черновой текст заменяется финальной локальной расшифровкой.
@@ -71,10 +71,10 @@ run.bat
 
 Основные поля:
 
-- `hotkey.combination` - по умолчанию `ctrl+win`
+- `hotkey.combination` - по умолчанию `ctrl+shift`
 - `audio.sample_rate` - по умолчанию `16000`
 - `audio.max_record_seconds` - по умолчанию `120`
-- `transcription.model_size` - финальная модель, по умолчанию `small`
+- `transcription.model_size` - финальная модель, по умолчанию `medium`
 - `transcription.language_mode` - `auto`, `ru`, `en`
 - `transcription.device` - `auto`, `cpu` или другой поддерживаемый CTranslate2 device
 - `transcription.compute_type` - `default`, `int8`, `float16` и т.д.
@@ -83,7 +83,7 @@ run.bat
 - `transcription.initial_prompt` - подсказка модели для диктовки
 - `transcription.hotwords` - слова и product names, которые нужно распознавать стабильнее
 - `live_preview.enabled` - включает черновой live preview
-- `live_preview.model_size` - модель для preview, по умолчанию `tiny`
+- `live_preview.model_size` - модель для preview, по умолчанию `base`
 - `live_preview.update_interval_seconds` - как часто обновлять live preview
 - `live_preview.min_audio_seconds` - минимальная длина snapshot перед preview
 - `live_preview.max_preview_window_seconds` - сколько последнего аудио брать в preview snapshot
@@ -96,22 +96,22 @@ run.bat
 ```json
 {
   "transcription": {
-    "model_size": "small",
+    "model_size": "medium",
     "language_mode": "ru",
     "device": "auto",
     "compute_type": "default",
-    "beam_size": 5,
-    "best_of": 5,
-    "initial_prompt": "Это русская диктовка. Точно распознавай слова. Сохраняй естественную пунктуацию. Не добавляй слов, которых нет в аудио.",
+    "beam_size": 6,
+    "best_of": 6,
+    "initial_prompt": "Это голосовая диктовка на русском и английском. Распознавай слова дословно. Не придумывай слова, которых нет в аудио. Сохраняй естественные точки, запятые и вопросительные знаки.",
     "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js"
   },
   "live_preview": {
     "enabled": true,
-    "model_size": "tiny",
+    "model_size": "base",
     "language_mode": "ru",
-    "update_interval_seconds": 1.0,
-    "min_audio_seconds": 1.0,
-    "max_preview_window_seconds": 8.0
+    "update_interval_seconds": 0.6,
+    "min_audio_seconds": 0.5,
+    "max_preview_window_seconds": 10.0
   },
   "text_postprocess": {
     "auto_copy": true,
@@ -129,8 +129,8 @@ run.bat
 
 Если нужен более быстрый отклик:
 
-- оставь `live_preview.model_size: "tiny"`
-- держи `transcription.model_size: "small"`
+- оставь `live_preview.model_size: "base"`
+- держи `transcription.model_size: "medium"`
 - не ставь `large-v3` на CPU, если важна задержка
 
 Если нужен более качественный финальный текст:

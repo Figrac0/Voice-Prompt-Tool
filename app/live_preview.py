@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import time
 from threading import Event, RLock, Thread
 
 from app.audio_recorder import AudioRecorder, AudioRecorderError
@@ -16,6 +18,12 @@ class LivePreviewError(RuntimeError):
 
 
 class LivePreviewService:
+    _MIN_INITIAL_DELAY_SECONDS = 0.9
+    _MIN_PREVIEW_CHARACTERS = 8
+    _MIN_PREVIEW_WORDS = 2
+    _STABLE_CANDIDATE_PASSES = 2
+    _SUSPICIOUS_REPEAT_RE = re.compile(r"(.)\1{6,}", re.IGNORECASE | re.DOTALL)
+
     def __init__(
         self,
         config: LivePreviewConfig,
@@ -38,6 +46,9 @@ class LivePreviewService:
         self._thread: Thread | None = None
         self._warmup_thread: Thread | None = None
         self._model_loaded = False
+        self._session_started_at = 0.0
+        self._candidate_text = ""
+        self._candidate_hits = 0
 
     @property
     def enabled(self) -> bool:
@@ -74,7 +85,9 @@ class LivePreviewService:
             if thread is not None and thread.is_alive():
                 return
 
+            self._reset_preview_state()
             self._text_injector.begin_live_session()
+            self._session_started_at = time.monotonic()
             stop_event = Event()
             self._stop_event = stop_event
             self._thread = Thread(
@@ -105,6 +118,8 @@ class LivePreviewService:
 
         if discard_preview:
             self._discard_preview()
+        else:
+            self._reset_preview_state()
 
         self._logger.info("Live preview session stopped | discarded=%s", discard_preview)
 
@@ -126,6 +141,7 @@ class LivePreviewService:
 
     def clear_session_state(self) -> None:
         self._text_injector.clear_live_session()
+        self._reset_preview_state()
 
     def _preview_loop(self, stop_event: Event) -> None:
         try:
@@ -137,6 +153,9 @@ class LivePreviewService:
         while not stop_event.is_set():
             if stop_event.wait(self._config.update_interval_seconds):
                 break
+
+            if (time.monotonic() - self._session_started_at) < self._MIN_INITIAL_DELAY_SECONDS:
+                continue
 
             try:
                 snapshot = self._audio_recorder.create_snapshot(
@@ -157,9 +176,12 @@ class LivePreviewService:
                 if stop_event.is_set():
                     continue
                 postprocessed = self._text_postprocessor.process_text(result.text)
-                preview_text = postprocessed.cleaned_text.strip()
+                preview_text = self._prepare_preview_text(postprocessed.cleaned_text)
 
                 if not preview_text:
+                    continue
+
+                if not self._should_publish_candidate(preview_text):
                     continue
 
                 if stop_event.is_set():
@@ -193,3 +215,62 @@ class LivePreviewService:
             self._text_injector.discard_live_session(self._clipboard_service)
         except TextInjectorError:
             self._logger.exception("Unable to discard live preview text.")
+        finally:
+            self._reset_preview_state()
+
+    def _prepare_preview_text(self, text: str) -> str:
+        normalized = " ".join(text.strip().split())
+
+        if len(normalized) < self._MIN_PREVIEW_CHARACTERS:
+            return ""
+
+        if len(normalized.split()) < self._MIN_PREVIEW_WORDS:
+            return ""
+
+        if normalized.endswith(("...", "…")):
+            return ""
+
+        if self._SUSPICIOUS_REPEAT_RE.search(normalized):
+            return ""
+
+        return normalized
+
+    def _should_publish_candidate(self, candidate: str) -> bool:
+        current_text = self._text_injector.live_text.strip()
+        current_words = self._normalized_words(current_text)
+        candidate_words = self._normalized_words(candidate)
+
+        if candidate == self._candidate_text:
+            self._candidate_hits += 1
+        else:
+            self._candidate_text = candidate
+            self._candidate_hits = 1
+
+        if not current_text:
+            return self._candidate_hits >= self._STABLE_CANDIDATE_PASSES
+
+        if len(candidate) < len(current_text):
+            return False
+
+        if candidate.startswith(current_text):
+            return True
+
+        if (
+            current_words
+            and len(candidate_words) > len(current_words)
+            and candidate_words[: len(current_words)] == current_words
+        ):
+            return True
+
+        return self._candidate_hits >= self._STABLE_CANDIDATE_PASSES
+
+    def _reset_preview_state(self) -> None:
+        self._session_started_at = 0.0
+        self._candidate_text = ""
+        self._candidate_hits = 0
+
+    @staticmethod
+    def _normalized_words(text: str) -> tuple[str, ...]:
+        normalized = text.casefold()
+        tokens = re.findall(r"\w+", normalized, flags=re.UNICODE)
+        return tuple(tokens)

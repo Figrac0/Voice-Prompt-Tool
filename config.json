@@ -17,7 +17,7 @@
     "backend": "log"
   },
   "hotkey": {
-    "combination": "ctrl+win"
+    "combination": "ctrl+shift"
   },
   "audio": {
     "sample_rate": 16000,
@@ -29,34 +29,34 @@
     "file_prefix": "recording"
   },
   "transcription": {
-    "model_size": "small",
+    "model_size": "medium",
     "language_mode": "ru",
     "device": "auto",
     "compute_type": "default",
     "cpu_threads": 0,
-    "beam_size": 5,
-    "best_of": 5,
+    "beam_size": 6,
+    "best_of": 6,
     "condition_on_previous_text": false,
     "without_timestamps": false,
-    "vad_filter": true,
-    "initial_prompt": "Это русская диктовка. Точно распознавай слова. Сохраняй естественную пунктуацию. Не добавляй слов, которых нет в аудио.",
+    "vad_filter": false,
+    "initial_prompt": "Это голосовая диктовка на русском и английском. Распознавай слова дословно. Не придумывай слова, которых нет в аудио. Сохраняй естественные точки, запятые и вопросительные знаки.",
     "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
     "language_detection_segments": 3
   },
   "live_preview": {
     "enabled": true,
-    "model_size": "tiny",
+    "model_size": "small",
     "language_mode": "ru",
     "device": "auto",
     "compute_type": "default",
-    "beam_size": 1,
-    "best_of": 1,
+    "beam_size": 2,
+    "best_of": 2,
     "condition_on_previous_text": false,
     "without_timestamps": true,
-    "vad_filter": false,
-    "update_interval_seconds": 1.0,
-    "min_audio_seconds": 1.0,
-    "max_preview_window_seconds": 8.0
+    "vad_filter": true,
+    "update_interval_seconds": 0.75,
+    "min_audio_seconds": 0.9,
+    "max_preview_window_seconds": 10.0
   },
   "text_postprocess": {
     "auto_copy": true,

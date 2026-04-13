@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from threading import Thread
 
 from app.audio_recorder import AudioRecorder, AudioRecorderError
 from app.clipboard_service import ClipboardService, ClipboardServiceError
@@ -319,16 +320,21 @@ def main() -> None:
             on_recording_stop=handle_recording_stop,
         )
 
-        def start_runtime() -> None:
-            try:
-                transcriber.load_model()
-            except TranscriberError as exc:
-                logger.exception("Model loading failed.")
-                state_store.set_error("Transcription model failed to load.", error=str(exc))
-                notifier.error(config.app_name, "Transcription model failed to load")
-                return
+        def warm_up_final_model_async() -> None:
+            def worker() -> None:
+                try:
+                    transcriber.load_model()
+                except TranscriberError:
+                    logger.exception("Final transcription model warm-up failed.")
+                    notifier.error(config.app_name, "Final transcription model warm-up failed")
 
-            live_preview_service.warm_up_async()
+            Thread(
+                target=worker,
+                daemon=True,
+                name="voice-prompt-final-model-warmup",
+            ).start()
+
+        def start_runtime() -> None:
             processing_worker.start()
 
             try:
@@ -338,6 +344,10 @@ def main() -> None:
                 logger.exception("Global hotkey registration failed.")
                 state_store.set_error("Global hotkey registration failed.", error=str(exc))
                 notifier.error(config.app_name, "Global hotkey registration failed")
+                return
+
+            live_preview_service.warm_up_async()
+            warm_up_final_model_async()
 
         def stop_runtime() -> None:
             hotkey_manager.stop()

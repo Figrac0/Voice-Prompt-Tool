@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +45,8 @@ class TranscriptionResult:
 
 
 class LocalTranscriber:
+    _SUSPICIOUS_REPEAT_RE = re.compile(r"(.)\1{6,}", re.IGNORECASE | re.DOTALL)
+
     def __init__(self, config: TranscriptionConfig, models_dir: Path, logger: logging.Logger) -> None:
         self._config = config
         self._models_dir = models_dir
@@ -66,7 +69,7 @@ class LocalTranscriber:
             cpu_threads = self._config.cpu_threads
 
             if cpu_threads <= 0:
-                cpu_threads = max(1, min(os.cpu_count() or 4, 8))
+                cpu_threads = max(1, (os.cpu_count() or 4) - 1)
 
             try:
                 self._model = WhisperModel(
@@ -94,7 +97,7 @@ class LocalTranscriber:
 
     def transcribe(self, audio_path: Path) -> TranscriptionResult:
         if self._model is None:
-            raise TranscriberError("The transcription model is not loaded.")
+            self.load_model()
         if not audio_path.exists():
             raise TranscriberError(f"Audio file does not exist: '{audio_path}'.")
         if not audio_path.is_file():
@@ -129,7 +132,12 @@ class LocalTranscriber:
                 initial_prompt=self._config.initial_prompt or None,
                 hotwords=self._config.hotwords or None,
                 language_detection_segments=self._config.language_detection_segments,
-                temperature=[0.0, 0.2, 0.4],
+                temperature=0.0,
+                repetition_penalty=1.05,
+                no_repeat_ngram_size=3,
+                compression_ratio_threshold=2.0,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.45,
             )
             segments = tuple(self._collect_segments(segments_iterable))
         except Exception as exc:
@@ -165,6 +173,9 @@ class LocalTranscriber:
                 language_probability,
             )
 
+        if self._is_suspicious_transcript(transcript_text):
+            self._logger.warning("Suspicious transcript pattern detected | audio=%s | text=%s", audio_path, transcript_text)
+
         self._logger.info("Transcript text | %s", transcript_text)
         self._logger.info(
             "Transcription finished | audio=%s | seconds=%.3f | segments=%s",
@@ -183,3 +194,14 @@ class LocalTranscriber:
                 end=float(segment.end),
                 text=str(segment.text),
             )
+
+    @classmethod
+    def _is_suspicious_transcript(cls, text: str) -> bool:
+        normalized = text.strip()
+        if not normalized:
+            return False
+
+        if cls._SUSPICIOUS_REPEAT_RE.search(normalized):
+            return True
+
+        return normalized.endswith(("...", "…"))

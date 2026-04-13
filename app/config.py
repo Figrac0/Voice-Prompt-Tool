@@ -26,7 +26,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "backend": "log",
     },
     "hotkey": {
-        "combination": "ctrl+win",
+        "combination": "ctrl+shift",
     },
     "audio": {
         "sample_rate": 16000,
@@ -38,37 +38,38 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "file_prefix": "recording",
     },
     "transcription": {
-        "model_size": "small",
+        "model_size": "medium",
         "language_mode": "ru",
         "device": "auto",
         "compute_type": "default",
         "cpu_threads": 0,
-        "beam_size": 5,
-        "best_of": 5,
+        "beam_size": 6,
+        "best_of": 6,
         "condition_on_previous_text": False,
         "without_timestamps": False,
-        "vad_filter": True,
+        "vad_filter": False,
         "initial_prompt": (
-            "Это русская диктовка. Точно распознавай слова. "
-            "Сохраняй естественную пунктуацию. Не добавляй слов, которых нет в аудио."
+            "Это голосовая диктовка на русском и английском. "
+            "Распознавай слова дословно. Не придумывай слова, которых нет в аудио. "
+            "Сохраняй естественные точки, запятые и вопросительные знаки."
         ),
         "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
         "language_detection_segments": 3,
     },
     "live_preview": {
         "enabled": True,
-        "model_size": "tiny",
+        "model_size": "small",
         "language_mode": "ru",
         "device": "auto",
         "compute_type": "default",
-        "beam_size": 1,
-        "best_of": 1,
+        "beam_size": 2,
+        "best_of": 2,
         "condition_on_previous_text": False,
         "without_timestamps": True,
-        "vad_filter": False,
-        "update_interval_seconds": 1.0,
-        "min_audio_seconds": 1.0,
-        "max_preview_window_seconds": 8.0,
+        "vad_filter": True,
+        "update_interval_seconds": 0.75,
+        "min_audio_seconds": 0.9,
+        "max_preview_window_seconds": 10.0,
     },
     "text_postprocess": {
         "auto_copy": True,
