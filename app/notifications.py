@@ -5,13 +5,15 @@ from typing import Any
 
 
 class NotificationManager:
+    """Routes notifications to the system tray icon and the log."""
+
     def __init__(self, logger: logging.Logger, enabled: bool = True) -> None:
         self._logger = logger
         self._enabled = enabled
-        self._tray_icon: Any | None = None
+        self._tray: Any | None = None
 
-    def bind_tray_icon(self, tray_icon: Any) -> None:
-        self._tray_icon = tray_icon
+    def bind_tray_icon(self, tray: Any) -> None:
+        self._tray = tray
 
     def info(self, title: str, message: str) -> None:
         self._dispatch(logging.INFO, title, message)
@@ -25,10 +27,10 @@ class NotificationManager:
     def _dispatch(self, level: int, title: str, message: str) -> None:
         self._logger.log(level, "%s | %s", title, message)
 
-        if not self._enabled or self._tray_icon is None:
+        if not self._enabled or self._tray is None:
             return
 
         try:
-            self._tray_icon.notify(message, title)
+            self._tray.notify(title, message, level)
         except Exception:
-            self._logger.exception("Unable to show local notification.")
+            self._logger.exception("Unable to show tray notification.")

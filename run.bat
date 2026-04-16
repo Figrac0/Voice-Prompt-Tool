@@ -1,68 +1,53 @@
 @echo off
 setlocal EnableDelayedExpansion
-
 cd /d "%~dp0"
 
-set "VENV_DIR=%CD%\.venv"
-set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
-set "BOOTSTRAP_PY="
+set "VENV_PYTHON=.venv\Scripts\python.exe"
 
-if not exist "%PYTHON_EXE%" (
-    if not defined BOOTSTRAP_PY (
-        if exist "%LocalAppData%\Programs\Python\Python313\python.exe" (
-            set "BOOTSTRAP_PY=""%LocalAppData%\Programs\Python\Python313\python.exe"""
-        )
-    )
+:: ── Ensure virtual environment exists ───────────────────────────────────────
+if exist "%VENV_PYTHON%" goto :deps
 
-    if not defined BOOTSTRAP_PY (
-        where python >nul 2>nul
-        if %errorlevel%==0 (
-            set "BOOTSTRAP_PY=python"
-        )
-    )
+echo [setup] Creating virtual environment...
 
-    if not defined BOOTSTRAP_PY (
-        where py >nul 2>nul
-        if %errorlevel%==0 (
-            set "BOOTSTRAP_PY=py -3"
-        )
-    )
-
-    if not defined BOOTSTRAP_PY (
-        echo Failed to find Python runtime.
-        exit /b 1
-    )
-
-    call !BOOTSTRAP_PY! -c "import sys" >nul 2>nul
-    if errorlevel 1 (
-        echo Python runtime command is unavailable: !BOOTSTRAP_PY!
-        echo Try reinstalling Python and enable "Add python.exe to PATH".
-        exit /b 1
-    )
-
-    call !BOOTSTRAP_PY! -m venv "%VENV_DIR%"
-
-    if errorlevel 1 (
-        echo Failed to create virtual environment.
-        exit /b 1
-    )
+set "BOOTSTRAP="
+if exist "%LocalAppData%\Programs\Python\Python313\python.exe" (
+    set "BOOTSTRAP=%LocalAppData%\Programs\Python\Python313\python.exe"
+    goto :create_venv
 )
+where python >nul 2>&1 && set "BOOTSTRAP=python" && goto :create_venv
+where py    >nul 2>&1 && set "BOOTSTRAP=py -3"  && goto :create_venv
 
-"%PYTHON_EXE%" -m pip install --disable-pip-version-check -r requirements.txt
+echo ERROR: Python 3.10+ not found.
+echo Install from https://python.org and tick "Add python.exe to PATH".
+pause
+exit /b 1
+
+:create_venv
+call %BOOTSTRAP% -m venv .venv
 if errorlevel 1 (
-    echo Failed to install dependencies.
+    echo ERROR: Failed to create virtual environment.
+    pause
     exit /b 1
 )
 
-echo Starting Voice Prompt Tool in console mode...
-echo Keep this window open while the tray app is running.
-echo Press Ctrl+C here only if you want to force-stop it.
-echo.
+:: ── Install / update dependencies ───────────────────────────────────────────
+:deps
+echo [setup] Checking dependencies...
+"%VENV_PYTHON%" -m pip install --upgrade pip --quiet
+"%VENV_PYTHON%" -m pip install -r requirements.txt --quiet
+if errorlevel 1 (
+    echo ERROR: Failed to install dependencies.
+    pause
+    exit /b 1
+)
 
-"%PYTHON_EXE%" -m app.main
-
-set "EXIT_CODE=%ERRORLEVEL%"
+:: ── Launch app ───────────────────────────────────────────────────────────────
+echo Starting Voice Prompt Tool...
+echo Hotkey: Ctrl+Shift  ^|  Tray icon in system tray  ^|  Close window to exit
 echo.
-echo Voice Prompt Tool exited with code %EXIT_CODE%.
+"%VENV_PYTHON%" -m app.main
+set "EXIT=%ERRORLEVEL%"
+echo.
+echo App exited (code %EXIT%).
 pause
-exit /b %EXIT_CODE%
+exit /b %EXIT%

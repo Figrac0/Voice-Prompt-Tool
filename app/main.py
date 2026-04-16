@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from threading import Thread
 
+from PySide6.QtWidgets import QApplication
+
 from app.audio_recorder import AudioRecorder, AudioRecorderError
 from app.clipboard_service import ClipboardService, ClipboardServiceError
 from app.config import ConfigError, TranscriptionConfig, ensure_runtime_paths, load_config
@@ -14,6 +16,7 @@ from app.logger import build_emergency_logger, configure_logging
 from app.notifications import NotificationManager
 from app.overlay import OverlayConfig, RecordingOverlay
 from app.processing_worker import BackgroundProcessingWorker, ProcessingJob, ProcessingOutcome
+from app.settings_dialog import SettingsDialog
 from app.single_instance import SingleInstanceError, SingleInstanceGuard
 from app.state import AppState, StateStore
 from app.text_injector import TextInjector, TextInjectorError
@@ -37,13 +40,24 @@ def main() -> None:
         ensure_runtime_paths(config)
         logger = configure_logging(config)
         logger.info("Application bootstrap started.")
+
         instance_guard = SingleInstanceGuard(
             lock_file=config.paths.temp_dir / f"{config.app_slug}.lock",
             logger=logger,
         )
         instance_guard.acquire()
 
+        # ── Qt application ────────────────────────────────────────────────────
+        # Must be created before any QWidget / QSystemTrayIcon.
+        qt_app = QApplication(sys.argv)
+        qt_app.setQuitOnLastWindowClosed(False)
+        qt_app.setApplicationName(config.app_name)
+        qt_app.setApplicationVersion("2.0.0")
+
+        # ── Core state ────────────────────────────────────────────────────────
         state_store = StateStore(logger=logger)
+
+        # ── Overlay ───────────────────────────────────────────────────────────
         overlay = RecordingOverlay(
             config=OverlayConfig(
                 enabled=config.overlay.enabled,
@@ -59,10 +73,35 @@ def main() -> None:
             state_store=state_store,
             logger=logger,
         )
+
+        # ── Settings dialog (created on demand) ───────────────────────────────
+        _settings_dialog: SettingsDialog | None = None
+
+        def open_settings() -> None:
+            nonlocal _settings_dialog
+            if _settings_dialog is None or not _settings_dialog.isVisible():
+                _settings_dialog = SettingsDialog(config.paths.config_file)
+            _settings_dialog.show()
+            _settings_dialog.raise_()
+            _settings_dialog.activateWindow()
+
+        # ── Tray ──────────────────────────────────────────────────────────────
+        tray_app = TrayApp(
+            config=config,
+            logger=logger,
+            state_store=state_store,
+            on_exit=lambda: _stop_runtime(),
+            on_open_settings=open_settings,
+        )
+
+        # ── Notifications ─────────────────────────────────────────────────────
         notifier = NotificationManager(
             logger=logger,
             enabled=config.notifications.enabled,
         )
+        notifier.bind_tray_icon(tray_app)
+
+        # ── Services ──────────────────────────────────────────────────────────
         audio_recorder = AudioRecorder(
             config=config.audio,
             temp_dir=config.paths.temp_dir,
@@ -112,11 +151,13 @@ def main() -> None:
             clipboard_service=clipboard_service,
             logger=logger,
         )
+        live_preview_service.set_text_update_callback(overlay.update_live_text)
+
         previous_history_entries = history_service.ensure_ready()
         audio_recorder.cleanup_stale_files()
         latest_sequence_id = 0
 
-        tray_app: TrayApp | None = None
+        # ── Background job processor ──────────────────────────────────────────
 
         def process_recording_job(job: ProcessingJob) -> ProcessingOutcome:
             nonlocal latest_sequence_id
@@ -127,7 +168,6 @@ def main() -> None:
             try:
                 transcription_result = transcriber.transcribe(audio_path)
                 postprocess_result = text_postprocessor.process_text(transcription_result.text)
-                logger.info("Raw and cleaned transcription are available in memory for next stages.")
 
                 if postprocess_result.raw_text.strip() or postprocess_result.cleaned_text.strip():
                     history_entry = history_service.build_entry(
@@ -136,107 +176,92 @@ def main() -> None:
                         language_mode=transcription_result.metadata.requested_language_mode,
                         recording_duration_seconds=job.recording_duration_seconds,
                     )
-
                     try:
                         history_service.append_entry(history_entry)
                     except HistoryServiceError:
                         logger.exception("History write failed.")
-                        notifier.error(config.app_name, "History save failed")
+                        notifier.error(config.app_name, "Не удалось сохранить историю")
                         completion_detail = "History save failed. Ready."
 
-                is_latest_result = job.sequence_id == latest_sequence_id
-                if postprocess_result.cleaned_text:
-                    if tray_app is not None:
-                        tray_app.set_last_transcript_preview(postprocess_result.cleaned_text)
+                is_latest = job.sequence_id == latest_sequence_id
 
-                    if not is_latest_result:
-                        logger.info(
-                            "Skipping clipboard/paste for stale sequence | sequence=%s | latest=%s",
-                            job.sequence_id,
-                            latest_sequence_id,
-                        )
+                if postprocess_result.cleaned_text:
+                    tray_app.set_last_transcript_preview(postprocess_result.cleaned_text)
+
+                    if not is_latest:
+                        logger.info("Skipping stale sequence %s (latest=%s)", job.sequence_id, latest_sequence_id)
                         completion_detail = "Skipped stale dictation result. Ready."
                     elif config.text_postprocess.auto_copy or config.text_postprocess.auto_paste:
                         try:
                             clipboard_service.copy_text(postprocess_result.cleaned_text)
                         except ClipboardServiceError:
                             logger.exception("Clipboard copy failed.")
-                            notifier.error(config.app_name, "Clipboard copy failed")
+                            notifier.error(config.app_name, "Не удалось скопировать текст")
                             completion_detail = "Clipboard copy failed. Ready."
                         else:
                             if config.text_postprocess.auto_paste:
                                 try:
-                                    live_preview_replaced = live_preview_service.apply_final_text(
+                                    replaced = live_preview_service.apply_final_text(
                                         postprocess_result.cleaned_text
                                     )
                                 except LivePreviewError:
-                                    live_preview_replaced = False
+                                    replaced = False
                                     logger.exception("Live preview finalization failed.")
-                                    notifier.error(config.app_name, "Live text update failed")
+                                    notifier.error(config.app_name, "Ошибка обновления текста")
                                     completion_detail = "Live text update failed. Ready."
                                 else:
-                                    if live_preview_replaced:
-                                        notifier.info(config.app_name, "Text pasted into active field")
+                                    if replaced:
+                                        notifier.info(config.app_name, "Текст вставлен")
 
-                                if not live_preview_replaced:
+                                if not replaced:
                                     try:
                                         text_injector.paste_from_clipboard()
                                     except TextInjectorError:
                                         logger.exception("Active window paste failed.")
-                                        notifier.error(config.app_name, "Text paste failed")
+                                        notifier.error(config.app_name, "Не удалось вставить текст")
                                         completion_detail = "Text paste failed. Ready."
                                     else:
-                                        notifier.info(config.app_name, "Text pasted into active field")
+                                        notifier.info(config.app_name, "Текст вставлен")
 
                             if config.text_postprocess.auto_copy:
-                                notifier.info(config.app_name, "Text copied to clipboard")
+                                notifier.info(config.app_name, "Текст скопирован")
                     else:
-                        logger.info("Clipboard copy and auto-paste are disabled by configuration.")
+                        logger.info("Clipboard copy and auto-paste are disabled.")
                 else:
                     if config.text_postprocess.auto_paste and live_preview_service.enabled:
                         try:
                             live_preview_service.apply_final_text("")
                         except LivePreviewError:
-                            logger.exception("Unable to discard empty live preview text.")
-                    logger.info("Cleaned text is empty. Clipboard copy skipped.")
-                    notifier.warning(config.app_name, "Recognized text is empty. Clipboard not updated")
-                    completion_detail = "Recognized text is empty. Ready."
+                            logger.exception("Unable to discard empty live preview.")
+                    logger.info("Cleaned text is empty. Skipping clipboard.")
+                    notifier.warning(config.app_name, "Текст не распознан")
+                    completion_detail = "Empty recognition result. Ready."
 
                 logger.info(
-                    "Last transcript summary | language=%s | raw_text=%s | cleaned_text=%s",
+                    "Transcript | lang=%s | raw=%s | clean=%s",
                     transcription_result.metadata.detected_language,
                     transcription_result.text,
                     postprocess_result.cleaned_text,
                 )
                 cleanup_processed_audio = True
                 return ProcessingOutcome(success=True, detail=completion_detail)
+
             except TranscriberError as exc:
                 logger.exception("Transcription error")
-                notifier.error(config.app_name, "Transcription failed")
-                return ProcessingOutcome(
-                    success=False,
-                    detail="Local transcription failed.",
-                    error=str(exc),
-                )
+                notifier.error(config.app_name, "Ошибка распознавания")
+                return ProcessingOutcome(success=False, detail="Transcription failed.", error=str(exc))
             except TextPostprocessError as exc:
-                logger.exception("Text post-processing error")
-                notifier.error(config.app_name, "Text processing failed")
-                return ProcessingOutcome(
-                    success=False,
-                    detail="Text post-processing failed.",
-                    error=str(exc),
-                )
+                logger.exception("Post-processing error")
+                notifier.error(config.app_name, "Ошибка обработки текста")
+                return ProcessingOutcome(success=False, detail="Post-processing failed.", error=str(exc))
             finally:
                 if cleanup_processed_audio:
                     audio_recorder.delete_recording_file(audio_path)
 
         def handle_processing_finished(
-            job: ProcessingJob,
-            outcome: ProcessingOutcome,
-            remaining: int,
+            job: ProcessingJob, outcome: ProcessingOutcome, remaining: int
         ) -> None:
             snapshot = state_store.snapshot()
-
             if outcome.success:
                 if (
                     remaining == 0
@@ -245,16 +270,7 @@ def main() -> None:
                 ):
                     state_store.finish_transcribing(outcome.detail)
                 return
-
-            logger.warning(
-                "Background processing failed | audio=%s | remaining=%s | recording=%s | detail=%s | error=%s",
-                job.audio_path,
-                remaining,
-                audio_recorder.is_recording,
-                outcome.detail,
-                outcome.error,
-            )
-
+            logger.warning("Background processing failed | %s | remaining=%s", outcome.error, remaining)
             if remaining == 0 and not audio_recorder.is_recording:
                 state_store.set_error(outcome.detail, error=outcome.error)
 
@@ -264,30 +280,31 @@ def main() -> None:
             on_job_finished=handle_processing_finished,
         )
 
+        # ── Hotkey handlers ───────────────────────────────────────────────────
+
         def handle_recording_start() -> bool:
             nonlocal latest_sequence_id
-            if not state_store.start_recording("Hotkey is held. Recording microphone audio."):
+            if not state_store.start_recording("Hotkey held. Recording microphone."):
                 return False
 
             latest_sequence_id += 1
-            # Start a fresh dictation session: previous clipboard payload is no longer relevant.
             try:
                 clipboard_service.clear()
             except ClipboardServiceError:
-                logger.exception("Unable to clear clipboard before new recording.")
+                logger.exception("Unable to clear clipboard before recording.")
 
             try:
                 audio_recorder.start_recording()
             except AudioRecorderError as exc:
                 logger.exception("Recording error")
                 state_store.set_error("Recording failed to start.", error=str(exc))
-                notifier.error(config.app_name, "Recording failed to start")
+                notifier.error(config.app_name, "Не удалось начать запись")
                 return False
 
             if config.text_postprocess.auto_paste and live_preview_service.enabled:
                 live_preview_service.start_session()
 
-            notifier.info(config.app_name, "Recording started")
+            notifier.info(config.app_name, "Запись началась")
             return True
 
         def handle_recording_stop() -> bool:
@@ -298,42 +315,39 @@ def main() -> None:
                 recording_result = audio_recorder.stop_recording()
             except AudioRecorderError as exc:
                 logger.exception("Recording error")
-                state_store.set_error("Recording failed to stop cleanly.", error=str(exc))
-                notifier.error(config.app_name, "Recording failed")
+                state_store.set_error("Recording failed to stop.", error=str(exc))
+                notifier.error(config.app_name, "Ошибка записи")
                 return False
 
             if recording_result.ignored:
                 if state_store.snapshot().state is AppState.RECORDING:
-                    state_store.finish_recording("Hotkey released. Recording ignored.")
-
+                    state_store.finish_recording("Recording ignored.")
                 if config.text_postprocess.auto_paste and live_preview_service.enabled:
                     try:
                         live_preview_service.apply_final_text("")
                     except LivePreviewError:
-                        logger.exception("Unable to discard ignored live preview text.")
-
+                        logger.exception("Unable to discard ignored live preview.")
                 if recording_result.reason == "short_recording":
-                    notifier.warning(config.app_name, "Short recording ignored")
-
+                    notifier.warning(config.app_name, "Запись слишком короткая")
                 return True
 
             artifact = recording_result.artifact
             if artifact is None:
                 if state_store.snapshot().state is AppState.RECORDING:
-                    state_store.finish_recording("Hotkey released. No recording artifact available.")
+                    state_store.finish_recording("No recording artifact.")
                 if config.text_postprocess.auto_paste and live_preview_service.enabled:
                     try:
                         live_preview_service.apply_final_text("")
                     except LivePreviewError:
-                        logger.exception("Unable to discard empty live preview text.")
-                notifier.warning(config.app_name, "Empty recording ignored")
+                        logger.exception("Unable to discard empty live preview.")
+                notifier.warning(config.app_name, "Пустая запись проигнорирована")
                 return False
 
-            if not state_store.start_transcribing("Recording stopped. Starting local transcription."):
+            if not state_store.start_transcribing("Recording stopped. Transcribing..."):
                 audio_recorder.delete_recording_file(artifact.file_path)
                 return False
 
-            # Push quick text immediately from live preview while accurate pass is running.
+            # Immediately push the live-preview draft so user sees text fast
             quick_text = live_preview_service.current_text.strip()
             if quick_text:
                 try:
@@ -341,9 +355,9 @@ def main() -> None:
                     if config.text_postprocess.auto_paste:
                         text_injector.paste_from_clipboard(settle_delay_seconds=0.01)
                 except (ClipboardServiceError, TextInjectorError):
-                    logger.exception("Quick publish from live preview failed.")
+                    logger.exception("Quick-publish from live preview failed.")
 
-            notifier.info(config.app_name, "Transcribing")
+            notifier.info(config.app_name, "Обработка...")
             processing_worker.enqueue(
                 ProcessingJob(
                     audio_path=str(artifact.file_path),
@@ -363,21 +377,16 @@ def main() -> None:
             on_recording_stop=handle_recording_stop,
         )
 
-        def warm_up_final_model_async() -> None:
-            def worker() -> None:
-                try:
-                    transcriber.load_model()
-                except TranscriberError:
-                    logger.exception("Final transcription model warm-up failed.")
-                    notifier.error(config.app_name, "Final transcription model warm-up failed")
+        # ── Warm-up helpers ───────────────────────────────────────────────────
 
-            Thread(
-                target=worker,
-                daemon=True,
-                name="voice-prompt-final-model-warmup",
-            ).start()
+        def _warm_up_final_model() -> None:
+            try:
+                transcriber.load_model()
+            except TranscriberError:
+                logger.exception("Final model warm-up failed.")
+                notifier.error(config.app_name, "Ошибка загрузки модели распознавания")
 
-        def start_runtime() -> None:
+        def _start_runtime() -> None:
             overlay.start()
             processing_worker.start()
 
@@ -385,15 +394,22 @@ def main() -> None:
                 hotkey_manager.start()
             except HotkeyRegistrationError as exc:
                 processing_worker.stop()
-                logger.exception("Global hotkey registration failed.")
-                state_store.set_error("Global hotkey registration failed.", error=str(exc))
-                notifier.error(config.app_name, "Global hotkey registration failed")
+                logger.exception("Hotkey registration failed.")
+                state_store.set_error("Hotkey registration failed.", error=str(exc))
+                notifier.error(config.app_name, "Не удалось зарегистрировать горячую клавишу")
                 return
 
             live_preview_service.warm_up_async()
-            warm_up_final_model_async()
+            Thread(target=_warm_up_final_model, daemon=True, name="voice-prompt-final-warmup").start()
 
-        def stop_runtime() -> None:
+        _runtime_stopped = False
+
+        def _stop_runtime() -> None:
+            nonlocal _runtime_stopped
+            if _runtime_stopped:
+                return
+            _runtime_stopped = True
+
             hotkey_manager.stop()
             live_preview_service.stop_session(discard_preview=False)
             overlay.stop()
@@ -405,33 +421,38 @@ def main() -> None:
 
             processing_worker.stop()
 
-        tray_app = TrayApp(
-            config=config,
-            logger=logger,
-            state_store=state_store,
-            notifier=notifier,
-            on_ready=start_runtime,
-            on_exit=stop_runtime,
-        )
+        # ── Initialise history and start ──────────────────────────────────────
 
         if previous_history_entries:
             tray_app.set_last_transcript_preview(previous_history_entries[-1].cleaned_text)
 
-        tray_app.run()
+        state_store.mark_ready("Background service is running.")
+        _start_runtime()
+
+        if config.tray.startup_notification:
+            notifier.info(
+                config.app_name,
+                f"Готов. Горячая клавиша: {config.hotkey.combination.upper()}",
+            )
+
+        # ── Qt main loop ──────────────────────────────────────────────────────
+        exit_code = qt_app.exec()
+
+        _stop_runtime()
+        sys.exit(exit_code)
+
     except ConfigError:
         emergency_logger.exception("Configuration bootstrap failed.")
         raise
     except SingleInstanceError:
-        emergency_logger.exception("A second instance launch was blocked.")
+        emergency_logger.exception("Second instance launch blocked.")
         raise SystemExit("Voice Prompt Tool is already running. Close the older instance first.")
     except Exception as exc:
         emergency_logger.exception("Unexpected startup failure.")
-
         try:
-            state_store.set_error("Startup failed.", error=str(exc))
+            state_store.set_error("Startup failed.", error=str(exc))  # type: ignore[possibly-undefined]
         except UnboundLocalError:
             pass
-
         raise
     finally:
         if instance_guard is not None:

@@ -1,205 +1,83 @@
 # Voice Prompt Tool
 
-Windows-only background диктовка для личного использования.
+Local voice-to-text for Windows. Hold a hotkey, speak, release — text appears wherever your cursor is.
 
-Текущий MVP умеет:
+Built on [faster-whisper](https://github.com/SYSTRAN/faster-whisper). No cloud, no API keys.
 
-- глобальный hotkey `Ctrl + Shift`
-- запись микрофона, пока hotkey удерживается
-- быстрый live preview в активном текстовом поле во время речи
-- финальную локальную транскрибацию через `faster-whisper` после отпускания hotkey
-- лёгкую постобработку текста
-- копирование в clipboard
-- вставку в активное поле
-- локальную историю в `data/history.json`
-- очистку temp-файлов и логирование
-- блокировку второго экземпляра приложения
-- маленький always-on-top оверлей-индикатор (кружок) во время записи
+## Requirements
 
-MVP не умеет:
-
-- cloud APIs
-- LLM rewrite / paraphrase
-- полноценный streaming ASR с идеальной построчной стабилизацией
-- идеальную пунктуацию и идеальное распознавание без ошибок
-
-## Как запускать
-
-Требования:
-
-- Windows
+- Windows 10/11
 - Python 3.10+
 
-Запуск:
+## Run
 
 ```bat
-cd voice_prompt_tool
 run.bat
 ```
 
-`run.bat` делает следующее:
+First launch creates `.venv` and downloads the selected Whisper model (~500 MB for `small`). Subsequent launches start in seconds.
 
-- создаёт `.venv`, если его нет
-- ставит зависимости из `requirements.txt`
-- запускает приложение в текущем окне консоли
+## Build standalone EXE
 
-Альтернативный запуск без `bat`:
-
-```powershell
-python -m app
+```bat
+build.bat
 ```
 
-## Сборка отдельного приложения (`.exe`)
+Output: `dist\VoicePromptTool\VoicePromptTool.exe` — no console, no Python required.
 
-```powershell
-.\build_exe.ps1
+## How it works
+
+1. Focus any text field.
+2. Hold `Ctrl+Shift` and speak.
+3. Live preview text appears while you speak (fast draft).
+4. Release the hotkey — final, more accurate transcription replaces the draft.
+5. Result is copied to clipboard and saved to `data/history.json`.
+
+Two-phase pipeline:
+- **Live preview** — `base` model, updates every 0.6 s while recording
+- **Final pass** — `small` model, `beam=5`, runs after release
+
+## Settings
+
+Right-click the tray icon → **Settings** to change model, language, hotkey, and paste behaviour without editing JSON.
+
+Manual config: `config.json` in the project root.
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `hotkey.combination` | `ctrl+shift` | Any combo of ctrl/shift/alt/win |
+| `transcription.model_size` | `small` | tiny / base / small / medium |
+| `transcription.language_mode` | `ru` | ru / en / auto |
+| `transcription.beam_size` | `5` | Higher = slower but more accurate |
+| `live_preview.model_size` | `base` | Model used for the draft |
+| `text_postprocess.auto_paste` | `true` | Insert into active field |
+| `text_postprocess.auto_copy` | `true` | Copy to clipboard |
+| `text_postprocess.custom_replacements` | `{}` | Phonetic → correct spelling |
+
+### Model speed vs. accuracy
+
+| Model | Size | CPU speed |
+|-------|------|-----------|
+| `tiny` | 150 MB | ~0.5 s |
+| `base` | 150 MB | ~1 s |
+| `small` | 500 MB | ~2–4 s |
+| `medium` | 1.5 GB | ~6–10 s |
+
+## File layout
+
+```
+run.bat              — launch script
+build.bat            — EXE builder
+config.json          — user config
+app/                 — source
+models/              — cached Whisper models (auto-downloaded)
+data/history.json    — transcript history (last 100 entries)
+logs/                — rotating log files
+temp/                — ephemeral WAV recordings (auto-cleaned)
 ```
 
-После сборки запускай:
+## Known limits
 
-`dist\VoicePromptTool\VoicePromptTool.exe`
-
-Приложение стартует без консоли, в трее и с оверлеем-индикатором.
-
-После старта:
-
-- в трее появится иконка
-- консоль останется открытой
-- runtime-логи будут видны сразу
-
-## Режим работы
-
-1. Наведи фокус на текстовое поле.
-2. Зажми `Ctrl + Shift`.
-3. Пока говоришь, приложение пишет микрофон и периодически обновляет черновой текст прямо в активном поле.
-4. Отпусти hotkey.
-5. Черновой текст заменяется финальной локальной расшифровкой.
-6. Финальный текст сохраняется в `data/history.json`.
-7. Финальный текст копируется в clipboard.
-
-Схема двухфазная:
-
-- `live_preview` - быстрый, менее точный черновик во время речи
-- `transcription` - более точный финальный проход после отпускания hotkey
-
-Именно эта схема приближает поведение к Wispr Flow, но это не его копия.
-
-## Конфиг
-
-Главный файл настроек - `config.json`.
-
-Основные поля:
-
-- `hotkey.combination` - по умолчанию `ctrl+shift`
-- `audio.sample_rate` - по умолчанию `16000`
-- `audio.max_record_seconds` - по умолчанию `120`
-- `transcription.model_size` - финальная модель, по умолчанию `medium`
-- `transcription.language_mode` - `auto`, `ru`, `en`
-- `transcription.device` - `auto`, `cpu` или другой поддерживаемый CTranslate2 device
-- `transcription.compute_type` - `default`, `int8`, `float16` и т.д.
-- `transcription.beam_size` - больше beam = медленнее, но обычно точнее
-- `transcription.best_of` - больше candidates = медленнее, но обычно точнее
-- `transcription.initial_prompt` - подсказка модели для диктовки
-- `transcription.hotwords` - слова и product names, которые нужно распознавать стабильнее
-- `live_preview.enabled` - включает черновой live preview
-- `live_preview.model_size` - модель для preview, по умолчанию `base`
-- `live_preview.update_interval_seconds` - как часто обновлять live preview
-- `live_preview.min_audio_seconds` - минимальная длина snapshot перед preview
-- `live_preview.max_preview_window_seconds` - сколько последнего аудио брать в preview snapshot
-- `overlay.enabled` - показывать мини-индикатор на экране
-- `overlay.size` - размер квадрата индикатора
-- `overlay.recording_color` - цвет круга в записи (по умолчанию белый)
-- `text_postprocess.auto_copy` - копировать итог в clipboard
-- `text_postprocess.auto_paste` - вставлять текст в активное поле
-- `text_postprocess.custom_replacements` - свои словарные замены после распознавания
-
-Пример:
-
-```json
-{
-  "transcription": {
-    "model_size": "medium",
-    "language_mode": "ru",
-    "device": "auto",
-    "compute_type": "default",
-    "beam_size": 6,
-    "best_of": 6,
-    "initial_prompt": "Это голосовая диктовка на русском и английском. Распознавай слова дословно. Не придумывай слова, которых нет в аудио. Сохраняй естественные точки, запятые и вопросительные знаки.",
-    "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js"
-  },
-  "live_preview": {
-    "enabled": true,
-    "model_size": "base",
-    "language_mode": "ru",
-    "update_interval_seconds": 0.6,
-    "min_audio_seconds": 0.5,
-    "max_preview_window_seconds": 10.0
-  },
-  "text_postprocess": {
-    "auto_copy": true,
-    "auto_paste": true,
-    "custom_replacements": {
-      "чат gpt": "ChatGPT",
-      "опен эй ай": "OpenAI",
-      "реакт": "React"
-    }
-  }
-}
-```
-
-## Как тюнить скорость и качество
-
-Если нужен более быстрый отклик:
-
-- оставь `live_preview.model_size: "base"`
-- держи `transcription.model_size: "medium"`
-- не ставь `large-v3` на CPU, если важна задержка
-
-Если нужен более качественный финальный текст:
-
-- попробуй `transcription.model_size: "medium"`
-- оставь `language_mode: "ru"`, если диктуешь в основном по-русски
-- дополняй `hotwords`
-- заполняй `custom_replacements`
-
-Если нужен агрессивный максимум качества:
-
-- `transcription.model_size: "large-v3"`
-
-Но на CPU это заметно увеличит задержку после отпускания hotkey.
-
-## История
-
-Файл истории - `data/history.json`.
-
-Каждая запись содержит:
-
-- `timestamp`
-- `raw_text`
-- `cleaned_text`
-- `language_mode`
-- `recording_duration_seconds`
-
-История:
-
-- ограничена `history_limit`
-- пишется атомарно
-- при порче файла автоматически восстанавливается
-- последовательные дубли не сохраняются повторно
-
-## Файлы и логи
-
-- основной лог: `logs/voice_prompt_tool.log`
-- bootstrap лог: `logs/bootstrap.log`
-- временные wav: `temp/*.wav`
-- модели: `models/`
-- история: `data/history.json`
-
-## Известные пределы
-
-- Это локальная CPU/GPU-диктовка, а не облачный сервис.
-- Live preview быстрее, но он менее точный, чем финальный проход.
-- Финальная фраза может появляться не мгновенно, если модель тяжёлая или железо слабое.
-- Если фокус уходит с нужного поля, auto-paste и live preview уйдут не туда.
-- Пунктуация и вопросительные знаки улучшаются эвристиками, но не гарантируются идеально.
-- До качества и latency Wispr Flow локальный `faster-whisper` без облака не дотягивает.
+- Auto-paste goes to whichever window has focus — don't switch windows mid-recording.
+- Punctuation is heuristic, not perfect.
+- First launch is slow while the model downloads and loads.

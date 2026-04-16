@@ -1,7 +1,5 @@
-# Clipboard, history hardening, and text post-processing use the Python standard library.
-Pillow>=10.3,<12.0
 faster-whisper>=1.2.1,<2.0
 pynput>=1.8.1,<2.0
-pystray>=0.19.5,<1.0
+PySide6>=6.6,<7.0
 sounddevice>=0.5.5,<0.6
 pyinstaller>=6.16.0,<7.0

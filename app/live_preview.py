@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from threading import Event, RLock, Thread
+from typing import Callable
 
 from app.audio_recorder import AudioRecorder, AudioRecorderError
 from app.clipboard_service import ClipboardService
@@ -49,6 +50,11 @@ class LivePreviewService:
         self._session_started_at = 0.0
         self._candidate_text = ""
         self._candidate_hits = 0
+        self._on_text_update: Callable[[str], None] | None = None
+
+    def set_text_update_callback(self, callback: Callable[[str], None]) -> None:
+        """Register a callback invoked each time the live preview text changes."""
+        self._on_text_update = callback
 
     @property
     def enabled(self) -> bool:
@@ -187,6 +193,11 @@ class LivePreviewService:
                 if stop_event.is_set():
                     continue
                 self._text_injector.replace_live_text(preview_text, self._clipboard_service)
+                if self._on_text_update is not None:
+                    try:
+                        self._on_text_update(preview_text)
+                    except Exception:
+                        self._logger.exception("Overlay text update callback failed.")
             except (TranscriberError, TextInjectorError):
                 self._logger.exception("Live preview update failed.")
             finally:

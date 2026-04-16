@@ -29,23 +29,23 @@
     "file_prefix": "recording"
   },
   "transcription": {
-    "model_size": "base",
+    "model_size": "small",
     "language_mode": "ru",
     "device": "auto",
     "compute_type": "int8",
-    "cpu_threads": 2,
-    "beam_size": 1,
-    "best_of": 1,
+    "cpu_threads": 4,
+    "beam_size": 5,
+    "best_of": 5,
     "condition_on_previous_text": false,
     "without_timestamps": true,
     "vad_filter": true,
-    "initial_prompt": "Это голосовая диктовка на русском и английском. Распознавай слова дословно. Не придумывай слова, которых нет в аудио. Сохраняй естественные точки, запятые и вопросительные знаки.",
-    "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
+    "initial_prompt": "Это голосовая диктовка для написания промптов на русском и английском. Распознавай слова дословно, точно. Не придумывай слов. Сохраняй знаки препинания.",
+    "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js, промпт, промпты",
     "language_detection_segments": 3
   },
   "live_preview": {
     "enabled": true,
-    "model_size": "tiny",
+    "model_size": "base",
     "language_mode": "ru",
     "device": "auto",
     "compute_type": "int8",
@@ -54,8 +54,8 @@
     "condition_on_previous_text": false,
     "without_timestamps": true,
     "vad_filter": true,
-    "update_interval_seconds": 0.45,
-    "min_audio_seconds": 0.55,
+    "update_interval_seconds": 0.6,
+    "min_audio_seconds": 0.7,
     "max_preview_window_seconds": 10.0
   },
   "text_postprocess": {
@@ -78,6 +78,6 @@
     "transcribing_alpha": 0.75,
     "idle_color": "#FFFFFF",
     "recording_color": "#2BFF59",
-    "transcribing_color": "#FFFFFF"
+    "transcribing_color": "#FF9F0A"
   }
 }

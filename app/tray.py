@@ -4,120 +4,236 @@ import logging
 import os
 from typing import Callable
 
-import pystray
-from PIL import Image, ImageDraw
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QFont,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from app.config import AppConfig
-from app.notifications import NotificationManager
-from app.state import StateSnapshot, StateStore
+from app.state import AppState, StateSnapshot, StateStore
 
 
-class TrayApp:
+class _TraySignals(QObject):
+    state_changed = Signal(object)  # StateSnapshot
+
+
+class TrayApp(QSystemTrayIcon):
+    """Qt system tray icon with context menu, dynamic state icons, and notifications."""
+
     def __init__(
         self,
         config: AppConfig,
         logger: logging.Logger,
         state_store: StateStore,
-        notifier: NotificationManager,
+        notifier=None,          # kept for compat, not used – NotificationManager calls us
         on_ready: Callable[[], None] | None = None,
         on_exit: Callable[[], None] | None = None,
+        on_open_settings: Callable[[], None] | None = None,
     ) -> None:
+        super().__init__()
         self._config = config
         self._logger = logger
         self._state_store = state_store
-        self._notifier = notifier
-        self._on_ready = on_ready
         self._on_exit = on_exit
-        self._last_transcript_preview: str | None = None
+        self._on_open_settings = on_open_settings
+        self._last_preview = ""
 
-        self._icon = pystray.Icon(
-            name=config.app_slug,
-            icon=self._build_icon_image(),
-            title=config.tray.tooltip,
-            menu=pystray.Menu(
-                pystray.MenuItem("Show current status", self._show_status, default=True),
-                pystray.MenuItem("Open history file", self._open_history_file),
-                pystray.MenuItem("Exit", self._exit_app),
-            ),
+        # Pre-render one icon per state so tray updates are instant
+        self._icons: dict[AppState, QIcon] = {s: _build_icon(s) for s in AppState}
+        self.setIcon(self._icons[AppState.IDLE])
+        self.setToolTip(config.tray.tooltip)
+
+        # ── Context menu ──────────────────────────────────────────────────────
+        menu = QMenu()
+        menu.setStyleSheet(_MENU_STYLE)
+
+        self._status_action = QAction("Voice Prompt Tool  —  Готов")
+        self._status_action.setEnabled(False)
+        menu.addAction(self._status_action)
+
+        self._preview_action = QAction("")
+        self._preview_action.setEnabled(False)
+        self._preview_action.setVisible(False)
+        menu.addAction(self._preview_action)
+
+        menu.addSeparator()
+
+        settings_act = QAction("⚙   Настройки...")
+        settings_act.triggered.connect(self._open_settings)
+        menu.addAction(settings_act)
+
+        history_act = QAction("📋  История записей")
+        history_act.triggered.connect(self._open_history)
+        menu.addAction(history_act)
+
+        menu.addSeparator()
+
+        hotkey_act = QAction(f"Клавиши: {config.hotkey.combination.upper()}")
+        hotkey_act.setEnabled(False)
+        menu.addAction(hotkey_act)
+
+        menu.addSeparator()
+
+        exit_act = QAction("✕   Выход")
+        exit_act.triggered.connect(self._do_exit)
+        menu.addAction(exit_act)
+
+        self.setContextMenu(menu)
+
+        # ── State listener (thread-safe via Qt signal bridge) ─────────────────
+        self._signals = _TraySignals(self)
+        self._signals.state_changed.connect(self._on_state_changed)
+        state_store.register_listener(
+            lambda snap: self._signals.state_changed.emit(snap)
         )
 
-        self._notifier.bind_tray_icon(self._icon)
-        self._state_store.register_listener(self._handle_state_change)
+        self.show()
+
+        # Notify on_ready immediately (replaces pystray setup callback)
+        if on_ready is not None:
+            on_ready()
+
+    # ── Public API (kept for compatibility) ───────────────────────────────────
 
     def run(self) -> None:
-        self._logger.info("Starting system tray loop.")
-        self._icon.run(self._setup_tray)
+        """No-op: the Qt event loop is managed by main.py."""
 
-    def _setup_tray(self, icon: pystray.Icon) -> None:
-        self._logger.info("System tray icon is ready.")
-        self._state_store.mark_ready("Background service is running.")
+    def notify(self, title: str, message: str, level: int = 0) -> None:
+        try:
+            icon_type = QSystemTrayIcon.MessageIcon.Information
+            self.showMessage(title, message, icon_type, 3500)
+        except Exception:
+            pass
 
-        if self._on_ready is not None:
-            self._on_ready()
+    def bind_tray_icon(self, _icon) -> None:
+        """Compatibility shim – no longer needed."""
 
-        if self._config.tray.startup_notification:
-            snapshot = self._state_store.snapshot()
-            self._notifier.info(
-                self._config.app_name,
-                f"Tray application started. Status is {snapshot.state.value}.",
-            )
+    def set_last_transcript_preview(self, text: str | None) -> None:
+        if text:
+            normalized = " ".join(text.split())[:80]
+            self._last_preview = normalized
+            self._preview_action.setText(f"   ↳ «{normalized}»")
+            self._preview_action.setVisible(True)
+        else:
+            self._last_preview = ""
+            self._preview_action.setVisible(False)
 
-    def _show_status(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        del icon, item
-        snapshot = self._state_store.snapshot()
-        status_text = snapshot.to_display_text()
+    # ── Qt slots ──────────────────────────────────────────────────────────────
 
-        if self._last_transcript_preview:
-            status_text = f"{status_text} | Last text: {self._last_transcript_preview}"
+    def _on_state_changed(self, snap: StateSnapshot) -> None:
+        self.setIcon(self._icons[snap.state])
+        label = {
+            AppState.IDLE: "Готов",
+            AppState.RECORDING: "Запись…",
+            AppState.TRANSCRIBING: "Обработка…",
+            AppState.ERROR: "Ошибка",
+        }.get(snap.state, snap.state.value)
+        self._status_action.setText(f"Voice Prompt Tool  —  {label}")
+        self.setToolTip(f"{self._config.tray.tooltip}  —  {label}")
 
-        self._logger.info("Status requested: %s", status_text)
-        self._notifier.info(self._config.app_name, status_text)
+    def _open_settings(self) -> None:
+        if self._on_open_settings:
+            self._on_open_settings()
 
-    def _open_history_file(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        del icon, item
+    def _open_history(self) -> None:
         history_file = self._config.paths.history_file
-
         if not history_file.exists():
-            self._notifier.error(self._config.app_name, "History file is missing.")
-            self._logger.error("History file does not exist: %s", history_file)
+            self.notify("Voice Prompt Tool", "Файл истории не найден.")
             return
-
-        self._logger.info("Opening history file: %s", history_file)
-
         try:
             os.startfile(str(history_file))
         except OSError:
-            self._logger.exception("Unable to open history file: %s", history_file)
-            self._notifier.error(self._config.app_name, "Unable to open history file.")
+            self._logger.exception("Unable to open history file.")
 
-    def _exit_app(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:
-        del item
+    def _do_exit(self) -> None:
         self._logger.info("Exit requested from tray menu.")
         self._state_store.shutdown("Application is shutting down.")
-        icon.stop()
-
-        if self._on_exit is not None:
+        if self._on_exit:
             self._on_exit()
+        QApplication.quit()
 
-    def _handle_state_change(self, snapshot: StateSnapshot) -> None:
-        self._icon.title = f"{self._config.tray.tooltip} - {snapshot.state.value}"
 
-    def set_last_transcript_preview(self, text: str | None) -> None:
-        if text is None:
-            self._last_transcript_preview = None
-            return
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-        normalized = " ".join(text.split()).strip()
-        self._last_transcript_preview = normalized[:80]
+def _build_icon(state: AppState) -> QIcon:
+    """Draw a microphone icon whose colours reflect the current app state."""
+    size = 64
+    pix = QPixmap(size, size)
+    pix.fill(QColor(0, 0, 0, 0))
 
-    @staticmethod
-    def _build_icon_image() -> Image.Image:
-        canvas = Image.new("RGBA", (64, 64), (24, 28, 38, 255))
-        draw = ImageDraw.Draw(canvas)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        draw.rounded_rectangle((18, 10, 46, 40), radius=14, fill=(69, 159, 255, 255))
-        draw.rectangle((26, 34, 38, 48), fill=(232, 240, 255, 255))
-        draw.rounded_rectangle((18, 46, 46, 52), radius=3, fill=(232, 240, 255, 255))
-        draw.arc((12, 14, 52, 54), start=200, end=340, fill=(232, 240, 255, 255), width=4)
+    bg_hex, fg_hex = {
+        AppState.IDLE: ("#18202E", "#459FFF"),
+        AppState.RECORDING: ("#2D0000", "#FF3B30"),
+        AppState.TRANSCRIBING: ("#2A1800", "#FF9F0A"),
+        AppState.ERROR: ("#1A1A1A", "#8E8E93"),
+    }.get(state, ("#18202E", "#459FFF"))
 
-        return canvas
+    fg = QColor(fg_hex)
+
+    # Background circle
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(QColor(bg_hex)))
+    p.drawEllipse(2, 2, 60, 60)
+
+    # Microphone body
+    p.setBrush(QBrush(fg))
+    body = QPainterPath()
+    body.addRoundedRect(22, 10, 20, 28, 10, 10)
+    p.fillPath(body, fg)
+
+    # Stand
+    p.fillRect(30, 38, 4, 8, fg)
+
+    # Base
+    base = QPainterPath()
+    base.addRoundedRect(20, 46, 24, 5, 2, 2)
+    p.fillPath(base, fg)
+
+    # Acoustic arc
+    arc_pen = QPen(fg, 3)
+    arc_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(arc_pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawArc(14, 10, 36, 40, 200 * 16, 140 * 16)
+
+    p.end()
+    return QIcon(pix)
+
+
+_MENU_STYLE = """
+QMenu {
+    background-color: #2C2C2E;
+    color: #EBEBF5;
+    border: 1px solid #48484A;
+    border-radius: 8px;
+    padding: 4px 0;
+}
+QMenu::item {
+    padding: 6px 20px 6px 12px;
+    border-radius: 4px;
+    margin: 1px 4px;
+}
+QMenu::item:selected {
+    background-color: #3A3A3C;
+}
+QMenu::item:disabled {
+    color: #636366;
+}
+QMenu::separator {
+    height: 1px;
+    background: #38383A;
+    margin: 3px 8px;
+}
+"""
