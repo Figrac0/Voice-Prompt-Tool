@@ -145,17 +145,17 @@ class GlobalHotkeyManager:
 
         key_map = {
             keyboard.Key.ctrl: "ctrl",
-            keyboard.Key.ctrl_l: "left_ctrl",
-            keyboard.Key.ctrl_r: "right_ctrl",
+            keyboard.Key.ctrl_l: "ctrl",
+            keyboard.Key.ctrl_r: "ctrl",
             keyboard.Key.alt: "alt",
-            keyboard.Key.alt_l: "left_alt",
-            keyboard.Key.alt_r: "right_alt",
+            keyboard.Key.alt_l: "alt",
+            keyboard.Key.alt_r: "alt",
             keyboard.Key.shift: "shift",
-            keyboard.Key.shift_l: "left_shift",
-            keyboard.Key.shift_r: "right_shift",
+            keyboard.Key.shift_l: "shift",
+            keyboard.Key.shift_r: "shift",
             keyboard.Key.cmd: "win",
-            keyboard.Key.cmd_l: "left_win",
-            keyboard.Key.cmd_r: "right_win",
+            keyboard.Key.cmd_l: "win",
+            keyboard.Key.cmd_r: "win",
         }
 
         return key_map.get(key)

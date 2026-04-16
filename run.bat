@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 cd /d "%~dp0"
 
@@ -8,16 +8,9 @@ set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
 set "BOOTSTRAP_PY="
 
 if not exist "%PYTHON_EXE%" (
-    where py >nul 2>nul
-    if %errorlevel%==0 (
-        py -3.11 -c "import sys" >nul 2>nul
-        if %errorlevel%==0 (
-            set "BOOTSTRAP_PY=py -3.11"
-        ) else (
-            py -3.10 -c "import sys" >nul 2>nul
-            if %errorlevel%==0 (
-                set "BOOTSTRAP_PY=py -3.10"
-            )
+    if not defined BOOTSTRAP_PY (
+        if exist "%LocalAppData%\Programs\Python\Python313\python.exe" (
+            set "BOOTSTRAP_PY=""%LocalAppData%\Programs\Python\Python313\python.exe"""
         )
     )
 
@@ -29,11 +22,25 @@ if not exist "%PYTHON_EXE%" (
     )
 
     if not defined BOOTSTRAP_PY (
-        echo Failed to find a suitable Python runtime.
+        where py >nul 2>nul
+        if %errorlevel%==0 (
+            set "BOOTSTRAP_PY=py -3"
+        )
+    )
+
+    if not defined BOOTSTRAP_PY (
+        echo Failed to find Python runtime.
         exit /b 1
     )
 
-    call %BOOTSTRAP_PY% -m venv "%VENV_DIR%"
+    call !BOOTSTRAP_PY! -c "import sys" >nul 2>nul
+    if errorlevel 1 (
+        echo Python runtime command is unavailable: !BOOTSTRAP_PY!
+        echo Try reinstalling Python and enable "Add python.exe to PATH".
+        exit /b 1
+    )
+
+    call !BOOTSTRAP_PY! -m venv "%VENV_DIR%"
 
     if errorlevel 1 (
         echo Failed to create virtual environment.

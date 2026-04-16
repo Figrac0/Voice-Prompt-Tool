@@ -11,6 +11,7 @@ from typing import Callable
 class ProcessingJob:
     audio_path: str
     recording_duration_seconds: float
+    sequence_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)

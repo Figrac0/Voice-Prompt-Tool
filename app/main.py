@@ -12,6 +12,7 @@ from app.hotkeys import GlobalHotkeyManager, HotkeyRegistrationError
 from app.live_preview import LivePreviewError, LivePreviewService
 from app.logger import build_emergency_logger, configure_logging
 from app.notifications import NotificationManager
+from app.overlay import OverlayConfig, RecordingOverlay
 from app.processing_worker import BackgroundProcessingWorker, ProcessingJob, ProcessingOutcome
 from app.single_instance import SingleInstanceError, SingleInstanceGuard
 from app.state import AppState, StateStore
@@ -43,6 +44,21 @@ def main() -> None:
         instance_guard.acquire()
 
         state_store = StateStore(logger=logger)
+        overlay = RecordingOverlay(
+            config=OverlayConfig(
+                enabled=config.overlay.enabled,
+                size=config.overlay.size,
+                margin=config.overlay.margin,
+                idle_alpha=config.overlay.idle_alpha,
+                recording_alpha=config.overlay.recording_alpha,
+                transcribing_alpha=config.overlay.transcribing_alpha,
+                idle_color=config.overlay.idle_color,
+                recording_color=config.overlay.recording_color,
+                transcribing_color=config.overlay.transcribing_color,
+            ),
+            state_store=state_store,
+            logger=logger,
+        )
         notifier = NotificationManager(
             logger=logger,
             enabled=config.notifications.enabled,
@@ -98,10 +114,12 @@ def main() -> None:
         )
         previous_history_entries = history_service.ensure_ready()
         audio_recorder.cleanup_stale_files()
+        latest_sequence_id = 0
 
         tray_app: TrayApp | None = None
 
         def process_recording_job(job: ProcessingJob) -> ProcessingOutcome:
+            nonlocal latest_sequence_id
             audio_path = Path(job.audio_path)
             completion_detail = "Processing finished. Ready."
             cleanup_processed_audio = False
@@ -126,11 +144,19 @@ def main() -> None:
                         notifier.error(config.app_name, "History save failed")
                         completion_detail = "History save failed. Ready."
 
+                is_latest_result = job.sequence_id == latest_sequence_id
                 if postprocess_result.cleaned_text:
                     if tray_app is not None:
                         tray_app.set_last_transcript_preview(postprocess_result.cleaned_text)
 
-                    if config.text_postprocess.auto_copy or config.text_postprocess.auto_paste:
+                    if not is_latest_result:
+                        logger.info(
+                            "Skipping clipboard/paste for stale sequence | sequence=%s | latest=%s",
+                            job.sequence_id,
+                            latest_sequence_id,
+                        )
+                        completion_detail = "Skipped stale dictation result. Ready."
+                    elif config.text_postprocess.auto_copy or config.text_postprocess.auto_paste:
                         try:
                             clipboard_service.copy_text(postprocess_result.cleaned_text)
                         except ClipboardServiceError:
@@ -239,10 +265,16 @@ def main() -> None:
         )
 
         def handle_recording_start() -> bool:
+            nonlocal latest_sequence_id
             if not state_store.start_recording("Hotkey is held. Recording microphone audio."):
-                if state_store.snapshot().state is AppState.TRANSCRIBING:
-                    notifier.warning(config.app_name, "Wait until the previous dictation is finalized")
                 return False
+
+            latest_sequence_id += 1
+            # Start a fresh dictation session: previous clipboard payload is no longer relevant.
+            try:
+                clipboard_service.clear()
+            except ClipboardServiceError:
+                logger.exception("Unable to clear clipboard before new recording.")
 
             try:
                 audio_recorder.start_recording()
@@ -301,11 +333,22 @@ def main() -> None:
                 audio_recorder.delete_recording_file(artifact.file_path)
                 return False
 
+            # Push quick text immediately from live preview while accurate pass is running.
+            quick_text = live_preview_service.current_text.strip()
+            if quick_text:
+                try:
+                    clipboard_service.copy_text(quick_text)
+                    if config.text_postprocess.auto_paste:
+                        text_injector.paste_from_clipboard(settle_delay_seconds=0.01)
+                except (ClipboardServiceError, TextInjectorError):
+                    logger.exception("Quick publish from live preview failed.")
+
             notifier.info(config.app_name, "Transcribing")
             processing_worker.enqueue(
                 ProcessingJob(
                     audio_path=str(artifact.file_path),
                     recording_duration_seconds=artifact.duration_seconds,
+                    sequence_id=latest_sequence_id,
                 )
             )
             return True
@@ -335,6 +378,7 @@ def main() -> None:
             ).start()
 
         def start_runtime() -> None:
+            overlay.start()
             processing_worker.start()
 
             try:
@@ -352,6 +396,7 @@ def main() -> None:
         def stop_runtime() -> None:
             hotkey_manager.stop()
             live_preview_service.stop_session(discard_preview=False)
+            overlay.stop()
 
             try:
                 audio_recorder.stop_recording()

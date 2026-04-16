@@ -78,6 +78,19 @@ class ClipboardService:
             if memory_handle is not None and memory_handle.value:
                 self._kernel32.GlobalFree(memory_handle)
 
+    def clear(self) -> None:
+        self._open_clipboard()
+        try:
+            if not self._user32.EmptyClipboard():
+                raise self._build_os_error("Unable to empty Windows clipboard.")
+            self._last_copied_text = None
+            self._logger.info("Clipboard cleared.")
+        except Exception:
+            self._logger.exception("Clipboard clear failed.")
+            raise
+        finally:
+            self._user32.CloseClipboard()
+
     def _open_clipboard(self) -> None:
         for _ in range(self._open_attempts):
             if self._user32.OpenClipboard(None):

@@ -14,6 +14,7 @@ Windows-only background диктовка для личного использо�
 - локальную историю в `data/history.json`
 - очистку temp-файлов и логирование
 - блокировку второго экземпляра приложения
+- маленький always-on-top оверлей-индикатор (кружок) во время записи
 
 MVP не умеет:
 
@@ -41,6 +42,24 @@ run.bat
 - создаёт `.venv`, если его нет
 - ставит зависимости из `requirements.txt`
 - запускает приложение в текущем окне консоли
+
+Альтернативный запуск без `bat`:
+
+```powershell
+python -m app
+```
+
+## Сборка отдельного приложения (`.exe`)
+
+```powershell
+.\build_exe.ps1
+```
+
+После сборки запускай:
+
+`dist\VoicePromptTool\VoicePromptTool.exe`
+
+Приложение стартует без консоли, в трее и с оверлеем-индикатором.
 
 После старта:
 
@@ -87,6 +106,9 @@ run.bat
 - `live_preview.update_interval_seconds` - как часто обновлять live preview
 - `live_preview.min_audio_seconds` - минимальная длина snapshot перед preview
 - `live_preview.max_preview_window_seconds` - сколько последнего аудио брать в preview snapshot
+- `overlay.enabled` - показывать мини-индикатор на экране
+- `overlay.size` - размер квадрата индикатора
+- `overlay.recording_color` - цвет круга в записи (по умолчанию белый)
 - `text_postprocess.auto_copy` - копировать итог в clipboard
 - `text_postprocess.auto_paste` - вставлять текст в активное поле
 - `text_postprocess.custom_replacements` - свои словарные замены после распознавания

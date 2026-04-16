@@ -38,16 +38,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "file_prefix": "recording",
     },
     "transcription": {
-        "model_size": "medium",
+        "model_size": "small",
         "language_mode": "ru",
         "device": "auto",
-        "compute_type": "default",
-        "cpu_threads": 0,
-        "beam_size": 6,
-        "best_of": 6,
+        "compute_type": "int8",
+        "cpu_threads": 2,
+        "beam_size": 3,
+        "best_of": 3,
         "condition_on_previous_text": False,
-        "without_timestamps": False,
-        "vad_filter": False,
+        "without_timestamps": True,
+        "vad_filter": True,
         "initial_prompt": (
             "Это голосовая диктовка на русском и английском. "
             "Распознавай слова дословно. Не придумывай слова, которых нет в аудио. "
@@ -58,10 +58,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "live_preview": {
         "enabled": True,
-        "model_size": "small",
+        "model_size": "tiny",
         "language_mode": "ru",
         "device": "auto",
-        "compute_type": "default",
+        "compute_type": "int8",
         "beam_size": 2,
         "best_of": 2,
         "condition_on_previous_text": False,
@@ -75,6 +75,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_copy": True,
         "auto_paste": True,
         "custom_replacements": {},
+    },
+    "overlay": {
+        "enabled": True,
+        "size": 34,
+        "margin": 12,
+        "idle_alpha": 0.65,
+        "recording_alpha": 0.95,
+        "transcribing_alpha": 0.75,
+        "idle_color": "#FFFFFF",
+        "recording_color": "#2BFF59",
+        "transcribing_color": "#FFFFFF",
     },
 }
 
@@ -165,6 +176,19 @@ class TextPostprocessConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class OverlayUiConfig:
+    enabled: bool
+    size: int
+    margin: int
+    idle_alpha: float
+    recording_alpha: float
+    transcribing_alpha: float
+    idle_color: str
+    recording_color: str
+    transcribing_color: str
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     app_name: str
     log_level: str
@@ -177,6 +201,7 @@ class AppConfig:
     transcription: TranscriptionConfig
     live_preview: LivePreviewConfig
     text_postprocess: TextPostprocessConfig
+    overlay: OverlayUiConfig
 
     @property
     def app_slug(self) -> str:
@@ -217,6 +242,7 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
     transcription = _as_object(merged_config["transcription"], "transcription")
     live_preview = _as_object(merged_config["live_preview"], "live_preview")
     text_postprocess = _as_object(merged_config["text_postprocess"], "text_postprocess")
+    overlay = _as_object(merged_config["overlay"], "overlay")
 
     history_path = _resolve_path(root_dir, _as_non_empty_string(paths["history_file"], "paths.history_file"))
     hotkey_combination = _as_non_empty_string(hotkey["combination"], "hotkey.combination")
@@ -322,6 +348,17 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
             auto_copy=_as_bool(text_postprocess["auto_copy"], "text_postprocess.auto_copy"),
             auto_paste=_as_bool(text_postprocess["auto_paste"], "text_postprocess.auto_paste"),
             custom_replacements=_parse_custom_replacements(text_postprocess["custom_replacements"]),
+        ),
+        overlay=OverlayUiConfig(
+            enabled=_as_bool(overlay["enabled"], "overlay.enabled"),
+            size=_as_positive_int(overlay["size"], "overlay.size"),
+            margin=_as_non_negative_int(overlay["margin"], "overlay.margin"),
+            idle_alpha=_as_unit_float(overlay["idle_alpha"], "overlay.idle_alpha"),
+            recording_alpha=_as_unit_float(overlay["recording_alpha"], "overlay.recording_alpha"),
+            transcribing_alpha=_as_unit_float(overlay["transcribing_alpha"], "overlay.transcribing_alpha"),
+            idle_color=_as_hex_color(overlay["idle_color"], "overlay.idle_color"),
+            recording_color=_as_hex_color(overlay["recording_color"], "overlay.recording_color"),
+            transcribing_color=_as_hex_color(overlay["transcribing_color"], "overlay.transcribing_color"),
         ),
     )
 
@@ -470,6 +507,13 @@ def _as_positive_float(value: Any, field_name: str) -> float:
     return float(value)
 
 
+def _as_unit_float(value: Any, field_name: str) -> float:
+    numeric = _as_positive_float(value, field_name)
+    if numeric > 1.0:
+        raise ConfigError(f"Configuration field '{field_name}' must be less than or equal to 1.0.")
+    return numeric
+
+
 def _parse_log_level(value: Any) -> str:
     normalized = _as_non_empty_string(value, "log_level").upper()
     if normalized not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
@@ -527,6 +571,16 @@ def _parse_custom_replacements(value: Any) -> tuple[tuple[str, str], ...]:
 
     normalized_items.sort(key=lambda item: len(item[0]), reverse=True)
     return tuple(normalized_items)
+
+
+def _as_hex_color(value: Any, field_name: str) -> str:
+    raw = _as_non_empty_string(value, field_name)
+    if len(raw) != 7 or not raw.startswith("#"):
+        raise ConfigError(f"Configuration field '{field_name}' must look like #RRGGBB.")
+    hex_part = raw[1:]
+    if any(ch not in "0123456789abcdefABCDEF" for ch in hex_part):
+        raise ConfigError(f"Configuration field '{field_name}' must look like #RRGGBB.")
+    return raw.upper()
 
 
 def _parse_hotkey_combination(combination: str) -> tuple[str, ...]:

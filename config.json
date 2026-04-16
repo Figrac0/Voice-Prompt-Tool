@@ -29,33 +29,33 @@
     "file_prefix": "recording"
   },
   "transcription": {
-    "model_size": "medium",
+    "model_size": "base",
     "language_mode": "ru",
     "device": "auto",
-    "compute_type": "default",
-    "cpu_threads": 0,
-    "beam_size": 6,
-    "best_of": 6,
+    "compute_type": "int8",
+    "cpu_threads": 2,
+    "beam_size": 1,
+    "best_of": 1,
     "condition_on_previous_text": false,
-    "without_timestamps": false,
-    "vad_filter": false,
+    "without_timestamps": true,
+    "vad_filter": true,
     "initial_prompt": "Это голосовая диктовка на русском и английском. Распознавай слова дословно. Не придумывай слова, которых нет в аудио. Сохраняй естественные точки, запятые и вопросительные знаки.",
     "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js",
     "language_detection_segments": 3
   },
   "live_preview": {
     "enabled": true,
-    "model_size": "small",
+    "model_size": "tiny",
     "language_mode": "ru",
     "device": "auto",
-    "compute_type": "default",
+    "compute_type": "int8",
     "beam_size": 2,
     "best_of": 2,
     "condition_on_previous_text": false,
     "without_timestamps": true,
     "vad_filter": true,
-    "update_interval_seconds": 0.75,
-    "min_audio_seconds": 0.9,
+    "update_interval_seconds": 0.45,
+    "min_audio_seconds": 0.55,
     "max_preview_window_seconds": 10.0
   },
   "text_postprocess": {
@@ -68,5 +68,16 @@
       "тайпскрипт": "TypeScript",
       "некст джей эс": "Next.js"
     }
+  },
+  "overlay": {
+    "enabled": true,
+    "size": 34,
+    "margin": 12,
+    "idle_alpha": 0.65,
+    "recording_alpha": 0.95,
+    "transcribing_alpha": 0.75,
+    "idle_color": "#FFFFFF",
+    "recording_color": "#2BFF59",
+    "transcribing_color": "#FFFFFF"
   }
 }

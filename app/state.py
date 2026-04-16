@@ -56,7 +56,7 @@ class StateStore:
         return self._transition(
             target_state=AppState.RECORDING,
             detail=detail,
-            allowed_from={AppState.IDLE},
+            allowed_from={AppState.IDLE, AppState.TRANSCRIBING},
         )
 
     def finish_recording(self, detail: str) -> bool:

@@ -18,10 +18,10 @@ class LivePreviewError(RuntimeError):
 
 
 class LivePreviewService:
-    _MIN_INITIAL_DELAY_SECONDS = 0.9
-    _MIN_PREVIEW_CHARACTERS = 8
-    _MIN_PREVIEW_WORDS = 2
-    _STABLE_CANDIDATE_PASSES = 2
+    _MIN_INITIAL_DELAY_SECONDS = 0.45
+    _MIN_PREVIEW_CHARACTERS = 2
+    _MIN_PREVIEW_WORDS = 1
+    _STABLE_CANDIDATE_PASSES = 1
     _SUSPICIOUS_REPEAT_RE = re.compile(r"(.)\1{6,}", re.IGNORECASE | re.DOTALL)
 
     def __init__(
