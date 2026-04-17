@@ -69,6 +69,11 @@
       "некст джей эс": "Next.js"
     }
   },
+  "groq": {
+    "enabled": true,
+    "api_key": "",
+    "model": "whisper-large-v3-turbo"
+  },
   "overlay": {
     "enabled": true,
     "size": 28,

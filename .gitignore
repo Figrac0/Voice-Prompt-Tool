@@ -31,10 +31,13 @@ models/
 data/history.json
 data/history.corrupt-*.json
 
+# secrets — never commit
+.env
+
 # config (если не хочешь пушить)
 # config.json
 
-# artifacts
+# runtime artifacts
 *.log
 *.wav
 *.bin

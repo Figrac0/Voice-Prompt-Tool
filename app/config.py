@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+
+DEFAULT_GROQ: dict[str, Any] = {
+    "enabled": False,
+    "api_key": "",
+    "model": "whisper-large-v3-turbo",
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "app_name": "Voice Prompt Tool",
@@ -87,6 +95,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "recording_color": "#2BFF59",
         "transcribing_color": "#FFFFFF",
     },
+    "groq": DEFAULT_GROQ,
 }
 
 
@@ -189,6 +198,13 @@ class OverlayUiConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class GroqConfig:
+    enabled: bool
+    api_key: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     app_name: str
     log_level: str
@@ -202,14 +218,22 @@ class AppConfig:
     live_preview: LivePreviewConfig
     text_postprocess: TextPostprocessConfig
     overlay: OverlayUiConfig
+    groq: GroqConfig
 
     @property
     def app_slug(self) -> str:
         return self.app_name.strip().lower().replace(" ", "_")
 
 
+def _get_root_dir() -> Path:
+    """Return project root — works both in dev and when frozen by PyInstaller."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent.parent
+
+
 def load_config(config_path: Path | None = None) -> AppConfig:
-    root_dir = Path(__file__).resolve().parent.parent
+    root_dir = _get_root_dir()
     resolved_config_path = config_path or root_dir / "config.json"
     raw_config = _read_json_object(resolved_config_path) if resolved_config_path.exists() else {}
     merged_config = _merge_dicts(DEFAULT_CONFIG, raw_config)
@@ -243,6 +267,7 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
     live_preview = _as_object(merged_config["live_preview"], "live_preview")
     text_postprocess = _as_object(merged_config["text_postprocess"], "text_postprocess")
     overlay = _as_object(merged_config["overlay"], "overlay")
+    groq_section = _as_object(_merge_dicts(DEFAULT_GROQ, merged_config.get("groq", {})), "groq")
 
     history_path = _resolve_path(root_dir, _as_non_empty_string(paths["history_file"], "paths.history_file"))
     hotkey_combination = _as_non_empty_string(hotkey["combination"], "hotkey.combination")
@@ -359,6 +384,12 @@ def _build_config(root_dir: Path, config_path: Path, merged_config: dict[str, An
             idle_color=_as_hex_color(overlay["idle_color"], "overlay.idle_color"),
             recording_color=_as_hex_color(overlay["recording_color"], "overlay.recording_color"),
             transcribing_color=_as_hex_color(overlay["transcribing_color"], "overlay.transcribing_color"),
+        ),
+        groq=GroqConfig(
+            enabled=_as_bool(groq_section["enabled"], "groq.enabled"),
+            api_key=_as_string(groq_section["api_key"], "groq.api_key")
+                or os.environ.get("GROQ_API_KEY", ""),
+            model=_as_non_empty_string(groq_section["model"], "groq.model"),
         ),
     )
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
@@ -38,6 +37,7 @@ class TrayApp(QSystemTrayIcon):
         on_ready: Callable[[], None] | None = None,
         on_exit: Callable[[], None] | None = None,
         on_open_settings: Callable[[], None] | None = None,
+        on_open_history: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._config = config
@@ -45,6 +45,7 @@ class TrayApp(QSystemTrayIcon):
         self._state_store = state_store
         self._on_exit = on_exit
         self._on_open_settings = on_open_settings
+        self._on_open_history = on_open_history
         self._last_preview = ""
 
         # Pre-render one icon per state so tray updates are instant
@@ -88,6 +89,9 @@ class TrayApp(QSystemTrayIcon):
         menu.addAction(exit_act)
 
         self.setContextMenu(menu)
+
+        # ── Left-click opens history window ───────────────────────────────────
+        self.activated.connect(self._on_activated)
 
         # ── State listener (thread-safe via Qt signal bridge) ─────────────────
         self._signals = _TraySignals(self)
@@ -144,15 +148,13 @@ class TrayApp(QSystemTrayIcon):
         if self._on_open_settings:
             self._on_open_settings()
 
+    def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self._open_history()
+
     def _open_history(self) -> None:
-        history_file = self._config.paths.history_file
-        if not history_file.exists():
-            self.notify("Voice Prompt Tool", "Файл истории не найден.")
-            return
-        try:
-            os.startfile(str(history_file))
-        except OSError:
-            self._logger.exception("Unable to open history file.")
+        if self._on_open_history:
+            self._on_open_history()
 
     def _do_exit(self) -> None:
         self._logger.info("Exit requested from tray menu.")

@@ -23,7 +23,9 @@ from PySide6.QtWidgets import QApplication
 from app.audio_recorder import AudioRecorder, AudioRecorderError
 from app.clipboard_service import ClipboardService, ClipboardServiceError
 from app.config import ConfigError, TranscriptionConfig, ensure_runtime_paths, load_config
+from app.groq_transcriber import GroqTranscriber
 from app.history_service import HistoryService, HistoryServiceError
+from app.history_window import HistoryWindow
 from app.hotkeys import GlobalHotkeyManager, HotkeyRegistrationError
 from app.live_preview import LivePreviewError, LivePreviewService
 from app.logger import build_emergency_logger, configure_logging
@@ -88,6 +90,15 @@ def main() -> None:
             logger=logger,
         )
 
+        # ── History window ────────────────────────────────────────────────────
+        history_window = HistoryWindow(
+            history_file=config.paths.history_file,
+            app_name=config.app_name,
+            hotkey=config.hotkey.combination,
+            on_exit=lambda: _stop_runtime(),
+            logger=logger,
+        )
+
         # ── Settings dialog (created on demand) ───────────────────────────────
         _settings_dialog: SettingsDialog | None = None
 
@@ -106,6 +117,7 @@ def main() -> None:
             state_store=state_store,
             on_exit=lambda: _stop_runtime(),
             on_open_settings=open_settings,
+            on_open_history=history_window.show_and_raise,
         )
 
         # ── Notifications ─────────────────────────────────────────────────────
@@ -128,11 +140,22 @@ def main() -> None:
             limit=config.history_limit,
             logger=logger,
         )
-        transcriber = LocalTranscriber(
-            config=config.transcription,
-            models_dir=config.paths.models_dir,
-            logger=logger,
-        )
+        if config.groq.enabled and config.groq.api_key:
+            transcriber = GroqTranscriber(
+                api_key=config.groq.api_key,
+                model=config.groq.model,
+                language_mode=config.transcription.language_mode,
+                initial_prompt=config.transcription.initial_prompt,
+                logger=logger,
+            )
+            logger.info("Transcription backend: Groq API | model=%s", config.groq.model)
+        else:
+            transcriber = LocalTranscriber(
+                config=config.transcription,
+                models_dir=config.paths.models_dir,
+                logger=logger,
+            )
+            logger.info("Transcription backend: local faster-whisper | model=%s", config.transcription.model_size)
         text_postprocessor = TextPostprocessor(
             config=config.text_postprocess,
             logger=logger,
@@ -201,6 +224,7 @@ def main() -> None:
 
                 if postprocess_result.cleaned_text:
                     tray_app.set_last_transcript_preview(postprocess_result.cleaned_text)
+                    history_window.notify_new_entry()
 
                     if not is_latest:
                         logger.info("Skipping stale sequence %s (latest=%s)", job.sequence_id, latest_sequence_id)
@@ -394,22 +418,17 @@ def main() -> None:
         # ── Warm-up helpers ───────────────────────────────────────────────────
 
         def _warm_up_models_sequential() -> None:
-            """Load live-preview model first, then the final model.
+            # Live-preview model (only if enabled)
+            if config.live_preview.enabled:
+                try:
+                    preview_transcriber.load_model()
+                    with live_preview_service._lock:
+                        live_preview_service._model_loaded = True
+                    logger.info("Live-preview model loaded.")
+                except TranscriberError:
+                    logger.exception("Live-preview model warm-up failed.")
 
-            Sequential loading avoids simultaneous MKL thread-pool initialisation
-            which triggers 'mkl_malloc: failed to allocate memory' on Windows.
-            """
-            # Step 1 – live-preview (smaller model, loads faster)
-            try:
-                preview_transcriber.load_model()
-                with live_preview_service._lock:
-                    live_preview_service._model_loaded = True
-                logger.info("Live-preview model loaded.")
-            except TranscriberError:
-                logger.exception("Live-preview model warm-up failed.")
-                notifier.error(config.app_name, "Ошибка загрузки модели предпросмотра")
-
-            # Step 2 – final transcription model
+            # Final transcription model (Groq just initialises the HTTP client)
             try:
                 transcriber.load_model()
             except TranscriberError:

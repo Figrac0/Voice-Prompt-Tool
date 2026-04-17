@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(.venv/Scripts/pip install *)",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(copy /y \"d:\\\\wisper-copy\\\\Voice-Prompt-Tool\\\\.env\" \"d:\\\\wisper-copy\\\\Voice-Prompt-Tool\\\\dist\\\\VoicePromptTool\\\\.env\")"
     ]
   }
 }

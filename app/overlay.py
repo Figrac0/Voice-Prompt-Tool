@@ -94,7 +94,7 @@ class RecordingOverlay(QWidget):
 
     def _handle_state(self, snap: StateSnapshot) -> None:
         self._state = snap.state
-        if snap.state is AppState.IDLE:
+        if snap.state in (AppState.IDLE, AppState.ERROR):
             self._timer.stop()
             self.hide()
         else:
