@@ -73,6 +73,15 @@ def main() -> None:
         # ── Core state ────────────────────────────────────────────────────────
         state_store = StateStore(logger=logger)
 
+        # ── History window ────────────────────────────────────────────────────
+        history_window = HistoryWindow(
+            history_file=config.paths.history_file,
+            app_name=config.app_name,
+            hotkey=config.hotkey.combination,
+            on_exit=lambda: _stop_runtime(),
+            logger=logger,
+        )
+
         # ── Overlay ───────────────────────────────────────────────────────────
         overlay = RecordingOverlay(
             config=OverlayConfig(
@@ -88,15 +97,7 @@ def main() -> None:
             ),
             state_store=state_store,
             logger=logger,
-        )
-
-        # ── History window ────────────────────────────────────────────────────
-        history_window = HistoryWindow(
-            history_file=config.paths.history_file,
-            app_name=config.app_name,
-            hotkey=config.hotkey.combination,
-            on_exit=lambda: _stop_runtime(),
-            logger=logger,
+            on_click=history_window.show_and_raise,
         )
 
         # ── Settings dialog (created on demand) ───────────────────────────────

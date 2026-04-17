@@ -17,7 +17,7 @@
     "backend": "log"
   },
   "hotkey": {
-    "combination": "ctrl+shift"
+    "combination": "ctrl+win"
   },
   "audio": {
     "sample_rate": 16000,

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import ctypes
 import logging
-import sys
 from dataclasses import dataclass
+from typing import Callable
 
-from PySide6.QtCore import Qt, QPoint, QTimer, Signal, QObject
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal, QObject
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from app.state import AppState, StateSnapshot, StateStore
@@ -30,21 +29,39 @@ class _Signals(QObject):
     text_updated = Signal(str)
 
 
-class RecordingOverlay(QWidget):
-    """Tiny pill indicator in the bottom-right corner.
+# Dot colours per state
+_STATE_COLORS = {
+    AppState.IDLE:        "#459FFF",   # blue
+    AppState.RECORDING:   "#2BFF59",   # green
+    AppState.TRANSCRIBING:"#FF9F0A",   # orange
+    AppState.ERROR:       "#FF453A",   # red
+}
 
-    Green dot = recording. Orange dot = transcribing. Hidden when idle.
+_STATE_LABELS = {
+    AppState.IDLE:        "Voice Prompt",
+    AppState.RECORDING:   "Запись...",
+    AppState.TRANSCRIBING:"Обработка...",
+    AppState.ERROR:       "Ошибка",
+}
+
+
+class RecordingOverlay(QWidget):
+    """Always-visible draggable pill indicator.
+
+    Idle = blue dot.  Recording = pulsing green.  Transcribing = pulsing orange.
+    Left-click opens the history window.  Drag to reposition.
     """
 
-    _W = 130
-    _H = 30
-    _R = 15.0  # corner radius (full pill)
+    _W = 170
+    _H = 38
+    _R = 19.0   # full pill radius
 
     def __init__(
         self,
         config: OverlayConfig,
         state_store: StateStore,
         logger: logging.Logger,
+        on_click: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(
             None,
@@ -54,18 +71,26 @@ class RecordingOverlay(QWidget):
         )
         self._config = config
         self._logger = logger
+        self._on_click = on_click
         self._state = AppState.IDLE
         self._anim_phase = 0
+
+        # Drag state
+        self._drag_origin: QPoint | None = None
+        self._drag_moved = False
 
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFixedSize(self._W, self._H)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
 
+        # Default position: bottom-right corner
         screen = QApplication.primaryScreen().geometry()
         m = config.margin
-        self.move(screen.width() - self._W - m, screen.height() - self._H - m - 40)
+        self.move(screen.width() - self._W - m, screen.height() - self._H - m - 48)
 
+        # Thread-safe signal bridge
         self._signals = _Signals(self)
         self._signals.state_changed.connect(self._handle_state)
         self._signals.text_updated.connect(self._handle_text)
@@ -73,6 +98,7 @@ class RecordingOverlay(QWidget):
             lambda snap: self._signals.state_changed.emit(snap)
         )
 
+        # Pulse animation (500 ms tick — only when active)
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
@@ -82,6 +108,8 @@ class RecordingOverlay(QWidget):
     def start(self) -> None:
         if not self._config.enabled:
             self._logger.info("Overlay disabled by config.")
+            return
+        self.show()
 
     def stop(self) -> None:
         self._timer.stop()
@@ -94,92 +122,109 @@ class RecordingOverlay(QWidget):
 
     def _handle_state(self, snap: StateSnapshot) -> None:
         self._state = snap.state
-        if snap.state in (AppState.IDLE, AppState.ERROR):
-            self._timer.stop()
-            self.hide()
-        else:
+        if snap.state in (AppState.RECORDING, AppState.TRANSCRIBING):
             self._timer.start()
-            self._apply_click_through()
-            self.show()
-            self.update()
+        else:
+            self._timer.stop()
+            self._anim_phase = 0
+        self.update()
 
-    def _handle_text(self, text: str) -> None:
+    def _handle_text(self, _text: str) -> None:
         self.update()
 
     def _tick(self) -> None:
         self._anim_phase ^= 1
         self.update()
 
+    # ── Mouse events (drag + click) ────────────────────────────────────────────
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_moved = False
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton and self._drag_origin is not None:
+            new_pos = event.globalPosition().toPoint() - self._drag_origin
+            delta = (new_pos - self.pos()).manhattanLength()
+            if delta > 4:
+                self._drag_moved = True
+            self.move(new_pos)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            if not self._drag_moved and self._on_click is not None:
+                self._on_click()
+            self._drag_origin = None
+            self._drag_moved = False
+        event.accept()
+
     # ── Painting ───────────────────────────────────────────────────────────────
 
     def paintEvent(self, _event) -> None:  # noqa: N802
-        if self._state is AppState.IDLE:
-            return
-
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         w, h, r = self._W, self._H, self._R
+        state = self._state
 
-        # Pill background
+        # ── Background pill ───────────────────────────────────────────────────
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, r, r)
-        bg = QColor("#1A1A1A")
-        bg.setAlphaF(0.90)
+
+        if state == AppState.IDLE:
+            bg = QColor("#1C1C1E")
+            bg.setAlphaF(0.82)
+        else:
+            bg = QColor("#1A1A1A")
+            bg.setAlphaF(0.95)
         p.fillPath(path, QBrush(bg))
 
-        # Subtle border
-        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(1, 1, w - 2, h - 2, r - 1, r - 1)
-
-        # Dot color + label
-        if self._state is AppState.RECORDING:
-            dot_color = self._config.recording_color
-            label = "Запись"
+        # ── Border ────────────────────────────────────────────────────────────
+        dot_hex = _STATE_COLORS[state]
+        if state == AppState.IDLE:
+            border_color = QColor(255, 255, 255, 22)
         else:
-            dot_color = self._config.transcribing_color
-            label = "Обработка"
+            border_color = QColor(dot_hex)
+            border_color.setAlphaF(0.35)
 
-        # Pulsing dot
-        dot_r = 5 if self._anim_phase == 0 else 4
-        dot_cx = 18
+        p.setPen(QPen(border_color, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
+
+        # ── Dot ───────────────────────────────────────────────────────────────
+        if state in (AppState.RECORDING, AppState.TRANSCRIBING):
+            dot_r = 6 if self._anim_phase == 0 else 5
+        else:
+            dot_r = 5
+
+        dot_cx = int(r)
         dot_cy = h // 2
 
-        glow = QColor(dot_color)
-        glow.setAlphaF(0.30)
+        # Glow
+        glow = QColor(dot_hex)
+        glow.setAlphaF(0.22 if state == AppState.IDLE else 0.32)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(glow))
-        p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 4, dot_r + 4)
+        p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 5, dot_r + 5)
 
-        p.setBrush(QBrush(QColor(dot_color)))
+        # Fill
+        p.setBrush(QBrush(QColor(dot_hex)))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r, dot_r)
 
-        # Label text
-        from PySide6.QtGui import QFont, QFontMetrics
-        font = QFont("Segoe UI", 10, QFont.Weight.Medium)
+        # ── Label ─────────────────────────────────────────────────────────────
+        label = _STATE_LABELS[state]
+        font = QFont("Segoe UI", 10, QFont.Weight.Medium if state == AppState.IDLE else QFont.Weight.SemiBold)
         p.setFont(font)
-        p.setPen(QColor("#EEEEEE"))
+
+        text_color = QColor("#8E8E93") if state == AppState.IDLE else QColor("#F2F2F7")
+        p.setPen(text_color)
+
         fm = QFontMetrics(font)
-        text_x = dot_cx + dot_r + 8
+        text_x = dot_cx + dot_r + 10
         text_y = (h + fm.ascent() - fm.descent()) // 2
         p.drawText(text_x, text_y, label)
 
         p.end()
-
-    # ── Windows click-through ─────────────────────────────────────────────────
-
-    def _apply_click_through(self) -> None:
-        if sys.platform != "win32":
-            return
-        try:
-            hwnd = int(self.winId())
-            GWL_EXSTYLE = -20
-            WS_EX_LAYERED = 0x00080000
-            WS_EX_TRANSPARENT = 0x00000020
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            ctypes.windll.user32.SetWindowLongW(
-                hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT
-            )
-        except Exception:
-            pass

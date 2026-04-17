@@ -78,7 +78,7 @@ class TrayApp(QSystemTrayIcon):
 
         menu.addSeparator()
 
-        hotkey_act = QAction(f"Клавиши: {config.hotkey.combination.upper()}")
+        hotkey_act = QAction(f"Клавиши: {config.hotkey.combination.upper().replace('+', ' + ')}")
         hotkey_act.setEnabled(False)
         menu.addAction(hotkey_act)
 
