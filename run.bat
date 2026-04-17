@@ -45,7 +45,7 @@ if errorlevel 1 (
 echo Starting Voice Prompt Tool...
 echo Hotkey: Ctrl+Shift  ^|  Tray icon in system tray  ^|  Close window to exit
 echo.
-"%VENV_PYTHON%" -m app.main
+"%VENV_PYTHON%" -m app
 set "EXIT=%ERRORLEVEL%"
 echo.
 echo App exited (code %EXIT%).

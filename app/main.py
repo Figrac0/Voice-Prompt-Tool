@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+import os
+
+# ── Fix ctranslate2 / Intel-MKL memory allocation failure on Windows ──────────
+# Must be set BEFORE faster_whisper / ctranslate2 are imported (these env vars
+# affect how MKL initialises its internal thread pool and aligned allocator).
+os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("MKL_ENABLE_INSTRUCTIONS", "SSE4_2")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("CT2_INTER_THREADS", "1")
+os.environ.setdefault("CT2_INTRA_THREADS", "1")
+# ─────────────────────────────────────────────────────────────────────────────
+
 import sys
 from pathlib import Path
 from threading import Thread
@@ -379,7 +393,23 @@ def main() -> None:
 
         # ── Warm-up helpers ───────────────────────────────────────────────────
 
-        def _warm_up_final_model() -> None:
+        def _warm_up_models_sequential() -> None:
+            """Load live-preview model first, then the final model.
+
+            Sequential loading avoids simultaneous MKL thread-pool initialisation
+            which triggers 'mkl_malloc: failed to allocate memory' on Windows.
+            """
+            # Step 1 – live-preview (smaller model, loads faster)
+            try:
+                preview_transcriber.load_model()
+                with live_preview_service._lock:
+                    live_preview_service._model_loaded = True
+                logger.info("Live-preview model loaded.")
+            except TranscriberError:
+                logger.exception("Live-preview model warm-up failed.")
+                notifier.error(config.app_name, "Ошибка загрузки модели предпросмотра")
+
+            # Step 2 – final transcription model
             try:
                 transcriber.load_model()
             except TranscriberError:
@@ -399,8 +429,11 @@ def main() -> None:
                 notifier.error(config.app_name, "Не удалось зарегистрировать горячую клавишу")
                 return
 
-            live_preview_service.warm_up_async()
-            Thread(target=_warm_up_final_model, daemon=True, name="voice-prompt-final-warmup").start()
+            Thread(
+                target=_warm_up_models_sequential,
+                daemon=True,
+                name="voice-prompt-model-warmup",
+            ).start()
 
         _runtime_stopped = False
 

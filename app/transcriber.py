@@ -68,15 +68,13 @@ class LocalTranscriber:
             started_at = time.perf_counter()
             cpu_threads = self._config.cpu_threads
 
-            if cpu_threads <= 0:
-                cpu_threads = max(1, (os.cpu_count() or 4) - 1)
-
             try:
                 self._model = WhisperModel(
                     self._config.model_size,
-                    device=self._config.device,
+                    device="cpu",           # explicit: skip device auto-detection
                     compute_type=self._config.compute_type,
                     cpu_threads=cpu_threads,
+                    num_workers=1,
                     download_root=str(self._models_dir),
                 )
             except Exception as exc:

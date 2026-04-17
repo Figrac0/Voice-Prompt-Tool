@@ -6,15 +6,7 @@ import sys
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, QPoint, QTimer, Signal, QObject
-from PySide6.QtGui import (
-    QBrush,
-    QColor,
-    QFont,
-    QFontMetrics,
-    QPainter,
-    QPainterPath,
-    QPen,
-)
+from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from app.state import AppState, StateSnapshot, StateStore
@@ -39,19 +31,14 @@ class _Signals(QObject):
 
 
 class RecordingOverlay(QWidget):
-    """Frameless pill-shaped floating indicator at the bottom-centre of the screen.
+    """Tiny pill indicator in the bottom-right corner.
 
-    Bridges the thread-safe StateStore to Qt via a QObject signal proxy so that
-    worker-thread state transitions safely marshal to the main-thread paint loop.
+    Green dot = recording. Orange dot = transcribing. Hidden when idle.
     """
 
-    _PILL_W = 360
-    _PILL_H = 52
-    _BOTTOM_MARGIN = 64
-    _SHADOW = 3           # shadow offset in pixels
-    _FONT_FAMILY = "Segoe UI"
-    _FONT_SIZE = 12
-    _MAX_CHARS = 42
+    _W = 130
+    _H = 30
+    _R = 15.0  # corner radius (full pill)
 
     def __init__(
         self,
@@ -68,23 +55,17 @@ class RecordingOverlay(QWidget):
         self._config = config
         self._logger = logger
         self._state = AppState.IDLE
-        self._live_text = ""
         self._anim_phase = 0
 
-        # Widget attributes
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFixedSize(self._PILL_W + self._SHADOW, self._PILL_H + self._SHADOW)
+        self.setFixedSize(self._W, self._H)
 
-        # Position: bottom-centre of primary screen
         screen = QApplication.primaryScreen().geometry()
-        self.move(
-            (screen.width() - self._PILL_W) // 2,
-            screen.height() - self._PILL_H - self._BOTTOM_MARGIN,
-        )
+        m = config.margin
+        self.move(screen.width() - self._W - m, screen.height() - self._H - m - 40)
 
-        # Thread-safe signal bridge
         self._signals = _Signals(self)
         self._signals.state_changed.connect(self._handle_state)
         self._signals.text_updated.connect(self._handle_text)
@@ -92,9 +73,8 @@ class RecordingOverlay(QWidget):
             lambda snap: self._signals.state_changed.emit(snap)
         )
 
-        # Pulsing dot animation (600 ms tick)
         self._timer = QTimer(self)
-        self._timer.setInterval(600)
+        self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -108,29 +88,23 @@ class RecordingOverlay(QWidget):
         self.hide()
 
     def update_live_text(self, text: str) -> None:
-        """Called from live-preview thread; marshalled to main thread via signal."""
         self._signals.text_updated.emit(text)
 
-    # ── Qt slots (always main thread) ─────────────────────────────────────────
+    # ── Qt slots ───────────────────────────────────────────────────────────────
 
     def _handle_state(self, snap: StateSnapshot) -> None:
         self._state = snap.state
         if snap.state is AppState.IDLE:
-            self._live_text = ""
             self._timer.stop()
             self.hide()
         else:
-            if snap.state is AppState.TRANSCRIBING:
-                self._live_text = ""
             self._timer.start()
             self._apply_click_through()
             self.show()
             self.update()
 
     def _handle_text(self, text: str) -> None:
-        if self._state is AppState.RECORDING:
-            self._live_text = text
-            self.update()
+        self.update()
 
     def _tick(self) -> None:
         self._anim_phase ^= 1
@@ -145,66 +119,49 @@ class RecordingOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self._PILL_W
-        h = self._PILL_H
-        r = h / 2.0
-        s = self._SHADOW
+        w, h, r = self._W, self._H, self._R
 
-        # Drop shadow (blurred approximation via offset semi-transparent pill)
-        shadow_path = QPainterPath()
-        shadow_path.addRoundedRect(s, s, w, h, r, r)
-        p.fillPath(shadow_path, QColor(0, 0, 0, 55))
+        # Pill background
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, w, h, r, r)
+        bg = QColor("#1A1A1A")
+        bg.setAlphaF(0.90)
+        p.fillPath(path, QBrush(bg))
 
-        # Pill body
-        pill_path = QPainterPath()
-        pill_path.addRoundedRect(0, 0, w, h, r, r)
-        bg = QColor("#1C1C1E")
-        bg.setAlphaF(0.94)
-        p.fillPath(pill_path, QBrush(bg))
-
-        # Subtle inner border
-        p.setPen(QPen(QColor(255, 255, 255, 18), 1))
+        # Subtle border
+        p.setPen(QPen(QColor(255, 255, 255, 22), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRoundedRect(1, 1, w - 2, h - 2, r - 1, r - 1)
 
-        # Indicator dot
+        # Dot color + label
         if self._state is AppState.RECORDING:
-            dot_hex = self._config.recording_color
+            dot_color = self._config.recording_color
+            label = "Запись"
         else:
-            dot_hex = "#FF9F0A"  # orange for transcribing regardless of config
+            dot_color = self._config.transcribing_color
+            label = "Обработка"
 
-        dot_r = 9 if self._anim_phase == 0 else 7
-        dot_cx = int(r) + 14
+        # Pulsing dot
+        dot_r = 5 if self._anim_phase == 0 else 4
+        dot_cx = 18
         dot_cy = h // 2
 
-        # Dot glow (soft halo)
-        glow = QColor(dot_hex)
-        glow.setAlphaF(0.25)
+        glow = QColor(dot_color)
+        glow.setAlphaF(0.30)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(glow))
-        p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 5, dot_r + 5)
+        p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 4, dot_r + 4)
 
-        # Dot fill
-        p.setBrush(QBrush(QColor(dot_hex)))
+        p.setBrush(QBrush(QColor(dot_color)))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r, dot_r)
 
-        # Label
-        if self._state is AppState.RECORDING:
-            label = self._live_text.strip() or "Запись..."
-        elif self._state is AppState.TRANSCRIBING:
-            label = "Обработка..."
-        else:
-            label = "Ошибка"
-
-        if len(label) > self._MAX_CHARS:
-            label = "…" + label[-(self._MAX_CHARS - 1):]
-
-        font = QFont(self._FONT_FAMILY, self._FONT_SIZE, QFont.Weight.Bold)
+        # Label text
+        from PySide6.QtGui import QFont, QFontMetrics
+        font = QFont("Segoe UI", 10, QFont.Weight.Medium)
         p.setFont(font)
-        p.setPen(QColor("#FFFFFF"))
-
+        p.setPen(QColor("#EEEEEE"))
         fm = QFontMetrics(font)
-        text_x = dot_cx + 9 + 12
+        text_x = dot_cx + dot_r + 8
         text_y = (h + fm.ascent() - fm.descent()) // 2
         p.drawText(text_x, text_y, label)
 
@@ -213,7 +170,6 @@ class RecordingOverlay(QWidget):
     # ── Windows click-through ─────────────────────────────────────────────────
 
     def _apply_click_through(self) -> None:
-        """Make the overlay transparent to mouse events via Windows API."""
         if sys.platform != "win32":
             return
         try:
