@@ -173,4 +173,5 @@ class GlobalHotkeyManager:
             keyboard.Key.cmd:     "win",
             keyboard.Key.cmd_l:   "win",
             keyboard.Key.cmd_r:   "win",
+            keyboard.Key.space:   "space",
         }.get(key)

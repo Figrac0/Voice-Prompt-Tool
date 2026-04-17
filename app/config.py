@@ -645,6 +645,8 @@ def _parse_hotkey_combination(combination: str) -> tuple[str, ...]:
         "right_windows": "right_win",
         "rwin": "right_win",
         "right_cmd": "right_win",
+        "space": "space",
+        "spacebar": "space",
     }
     supported_tokens = {
         "ctrl",
@@ -659,6 +661,7 @@ def _parse_hotkey_combination(combination: str) -> tuple[str, ...]:
         "right_shift",
         "left_win",
         "right_win",
+        "space",
     }
 
     raw_tokens = [part.strip().lower().replace(" ", "_") for part in combination.split("+")]

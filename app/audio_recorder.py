@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import struct
 import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Lock, RLock, Thread
+from typing import Callable
 from uuid import uuid4
 
 import sounddevice as sd
@@ -60,6 +62,11 @@ class AudioRecorder:
         self._lock = RLock()
         self._active_session: _RecordingSession | None = None
         self._last_result: RecordingResult | None = None
+        self._level_callback: Callable[[float], None] | None = None
+
+    def set_level_callback(self, callback: Callable[[float], None] | None) -> None:
+        """Register a callback that receives normalised RMS (0.0–1.0) per audio block."""
+        self._level_callback = callback
 
     @property
     def last_result(self) -> RecordingResult | None:
@@ -300,6 +307,17 @@ class AudioRecorder:
                         with session.buffer_lock:
                             session.audio_buffer.extend(data)
                             session.frames_captured += len(data) // bytes_per_frame
+
+                        cb = self._level_callback
+                        if cb is not None:
+                            try:
+                                samples = struct.unpack(f"{len(data) // 2}h", bytes(data))
+                                rms = (sum(s * s for s in samples) / max(len(samples), 1)) ** 0.5
+                                # Normalize against a realistic speech ceiling (~8000) so
+                                # normal speech (RMS 500-5000) fills the waveform visibly.
+                                cb(min(1.0, rms / 8000.0))
+                            except Exception:
+                                pass
         except Exception as exc:
             session.error = exc
             ready_event.set()

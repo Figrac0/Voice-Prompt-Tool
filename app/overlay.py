@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from typing import Callable
 
@@ -25,36 +26,35 @@ class OverlayConfig:
 
 
 class _Signals(QObject):
-    state_changed = Signal(object)  # StateSnapshot
-    text_updated = Signal(str)
+    state_changed = Signal(object)
+    level_received = Signal(float)
 
 
-# Dot colours per state
-_STATE_COLORS = {
-    AppState.IDLE:        "#459FFF",   # blue
-    AppState.RECORDING:   "#2BFF59",   # green
-    AppState.TRANSCRIBING:"#FF9F0A",   # orange
-    AppState.ERROR:       "#FF453A",   # red
-}
+_IDLE_DOT   = "#459FFF"   # blue
+_REC_COLOR  = "#2BFF59"   # green
+_ERR_COLOR  = "#FF453A"   # red
 
-_STATE_LABELS = {
-    AppState.IDLE:        "Voice Prompt",
-    AppState.RECORDING:   "Запись...",
-    AppState.TRANSCRIBING:"Обработка...",
-    AppState.ERROR:       "Ошибка",
-}
+_WAVEFORM_BARS  = 14      # number of bars in waveform
+_WAVEFORM_W     = 56      # total waveform section width (px)
+_BAR_W          = 3       # each bar width
+_BAR_MAX_H      = 20      # max bar height (px)
+_BAR_MIN_H      = 2       # min bar height
 
 
 class RecordingOverlay(QWidget):
-    """Always-visible draggable pill indicator.
+    """Always-visible draggable pill.
 
-    Idle = blue dot.  Recording = pulsing green.  Transcribing = pulsing orange.
-    Left-click opens the history window.  Drag to reposition.
+    Idle  → blue dot + 'Voice Prompt'
+    Recording → animated audio waveform + 'Запись...'
+    Transcribing / Error → treated same as Idle (instant, no separate phase)
+
+    Click  → open history window.
+    Drag   → reposition anywhere on screen.
     """
 
-    _W = 170
-    _H = 38
-    _R = 19.0   # full pill radius
+    _W = 178
+    _H = 40
+    _R = 20.0
 
     def __init__(
         self,
@@ -69,10 +69,13 @@ class RecordingOverlay(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool,
         )
-        self._config = config
-        self._logger = logger
+        self._config   = config
+        self._logger   = logger
         self._on_click = on_click
-        self._state = AppState.IDLE
+        self._state    = AppState.IDLE
+
+        # Waveform state
+        self._levels: deque[float] = deque([0.0] * _WAVEFORM_BARS, maxlen=_WAVEFORM_BARS)
         self._anim_phase = 0
 
         # Drag state
@@ -85,29 +88,28 @@ class RecordingOverlay(QWidget):
         self.setFixedSize(self._W, self._H)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
 
-        # Default position: bottom-right corner
+        # Default position: bottom-right
         screen = QApplication.primaryScreen().geometry()
         m = config.margin
-        self.move(screen.width() - self._W - m, screen.height() - self._H - m - 48)
+        self.move(screen.width() - self._W - m, screen.height() - self._H - m - 50)
 
-        # Thread-safe signal bridge
+        # Signal bridge
         self._signals = _Signals(self)
         self._signals.state_changed.connect(self._handle_state)
-        self._signals.text_updated.connect(self._handle_text)
+        self._signals.level_received.connect(self._handle_level)
         state_store.register_listener(
             lambda snap: self._signals.state_changed.emit(snap)
         )
 
-        # Pulse animation (500 ms tick — only when active)
+        # Repaint timer during recording (for idle animation of bars)
         self._timer = QTimer(self)
-        self._timer.setInterval(500)
+        self._timer.setInterval(80)
         self._timer.timeout.connect(self._tick)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
         if not self._config.enabled:
-            self._logger.info("Overlay disabled by config.")
             return
         self.show()
 
@@ -115,28 +117,41 @@ class RecordingOverlay(QWidget):
         self._timer.stop()
         self.hide()
 
-    def update_live_text(self, text: str) -> None:
-        self._signals.text_updated.emit(text)
+    def push_audio_level(self, level: float) -> None:
+        """Thread-safe: called from audio recorder callback with normalised RMS."""
+        self._signals.level_received.emit(level)
+
+    # kept for API compat
+    def update_live_text(self, _text: str) -> None:
+        pass
 
     # ── Qt slots ───────────────────────────────────────────────────────────────
 
     def _handle_state(self, snap: StateSnapshot) -> None:
+        prev = self._state
         self._state = snap.state
-        if snap.state in (AppState.RECORDING, AppState.TRANSCRIBING):
+        if snap.state == AppState.RECORDING:
             self._timer.start()
         else:
             self._timer.stop()
+            # Reset bars smoothly
+            self._levels = deque([0.0] * _WAVEFORM_BARS, maxlen=_WAVEFORM_BARS)
             self._anim_phase = 0
-        self.update()
+        if snap.state != prev:
+            self.update()
 
-    def _handle_text(self, _text: str) -> None:
+    def _handle_level(self, level: float) -> None:
+        self._levels.append(level)
         self.update()
 
     def _tick(self) -> None:
-        self._anim_phase ^= 1
+        # When no new audio comes in, slowly decay bars
+        self._anim_phase = (self._anim_phase + 1) % 8
+        decayed = deque((v * 0.88 for v in self._levels), maxlen=_WAVEFORM_BARS)
+        self._levels = decayed
         self.update()
 
-    # ── Mouse events (drag + click) ────────────────────────────────────────────
+    # ── Mouse events ───────────────────────────────────────────────────────────
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -147,8 +162,7 @@ class RecordingOverlay(QWidget):
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if event.buttons() & Qt.MouseButton.LeftButton and self._drag_origin is not None:
             new_pos = event.globalPosition().toPoint() - self._drag_origin
-            delta = (new_pos - self.pos()).manhattanLength()
-            if delta > 4:
+            if (new_pos - self.pos()).manhattanLength() > 4:
                 self._drag_moved = True
             self.move(new_pos)
         event.accept()
@@ -165,66 +179,89 @@ class RecordingOverlay(QWidget):
 
     def paintEvent(self, _event) -> None:  # noqa: N802
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w, h, r = self._W, self._H, self._R
-        state = self._state
+            w, h, r = self._W, self._H, self._R
+            recording = self._state == AppState.RECORDING
 
-        # ── Background pill ───────────────────────────────────────────────────
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, w, h, r, r)
-
-        if state == AppState.IDLE:
+            # ── Background ────────────────────────────────────────────────────────
+            path = QPainterPath()
+            path.addRoundedRect(0, 0, w, h, r, r)
             bg = QColor("#1C1C1E")
-            bg.setAlphaF(0.82)
-        else:
-            bg = QColor("#1A1A1A")
-            bg.setAlphaF(0.95)
-        p.fillPath(path, QBrush(bg))
+            bg.setAlphaF(0.88 if not recording else 0.95)
+            p.fillPath(path, QBrush(bg))
 
-        # ── Border ────────────────────────────────────────────────────────────
-        dot_hex = _STATE_COLORS[state]
-        if state == AppState.IDLE:
-            border_color = QColor(255, 255, 255, 22)
-        else:
-            border_color = QColor(dot_hex)
-            border_color.setAlphaF(0.35)
+            # ── Border ────────────────────────────────────────────────────────────
+            if recording:
+                border = QColor(_REC_COLOR)
+                border.setAlphaF(0.45)
+            else:
+                border = QColor(255, 255, 255, 20)
+            p.setPen(QPen(border, 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
 
-        p.setPen(QPen(border_color, 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(0.5, 0.5, w - 1, h - 1, r, r)
+            left_pad = int(r)  # content starts after pill curve
 
-        # ── Dot ───────────────────────────────────────────────────────────────
-        if state in (AppState.RECORDING, AppState.TRANSCRIBING):
-            dot_r = 6 if self._anim_phase == 0 else 5
-        else:
-            dot_r = 5
+            if recording:
+                self._paint_waveform(p, left_pad, h)
+            else:
+                self._paint_idle_dot(p, left_pad, h)
+        finally:
+            p.end()
 
-        dot_cx = int(r)
+    def _paint_idle_dot(self, p: QPainter, left_pad: int, h: int) -> None:
+        dot_r  = 5
+        dot_cx = left_pad
         dot_cy = h // 2
 
         # Glow
-        glow = QColor(dot_hex)
-        glow.setAlphaF(0.22 if state == AppState.IDLE else 0.32)
+        glow = QColor(_IDLE_DOT)
+        glow.setAlphaF(0.20)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(glow))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 5, dot_r + 5)
 
-        # Fill
-        p.setBrush(QBrush(QColor(dot_hex)))
+        # Dot
+        p.setBrush(QBrush(QColor(_IDLE_DOT)))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r, dot_r)
 
-        # ── Label ─────────────────────────────────────────────────────────────
-        label = _STATE_LABELS[state]
-        font = QFont("Segoe UI", 10, QFont.Weight.Medium if state == AppState.IDLE else QFont.Weight.SemiBold)
+        # Label
+        font = QFont("Segoe UI", 10, QFont.Weight.Medium)
         p.setFont(font)
-
-        text_color = QColor("#8E8E93") if state == AppState.IDLE else QColor("#F2F2F7")
-        p.setPen(text_color)
-
+        p.setPen(QColor("#8E8E93"))
         fm = QFontMetrics(font)
-        text_x = dot_cx + dot_r + 10
-        text_y = (h + fm.ascent() - fm.descent()) // 2
-        p.drawText(text_x, text_y, label)
+        tx = dot_cx + dot_r + 9
+        ty = (h + fm.ascent() - fm.descent()) // 2
+        p.drawText(tx, ty, "Voice Prompt")
 
-        p.end()
+    def _paint_waveform(self, p: QPainter, left_pad: int, h: int) -> None:
+        levels = list(self._levels)
+        n      = len(levels)
+        cx_start = left_pad + 2
+
+        p.setPen(Qt.PenStyle.NoPen)
+
+        for i, lvl in enumerate(levels):
+            bar_h  = max(_BAR_MIN_H, int(_BAR_MAX_H * (lvl ** 0.25)))
+            bar_x  = cx_start + i * (_BAR_W + 2)
+            bar_y  = (h - bar_h) // 2
+
+            # Colour: brighter green for louder bars
+            alpha  = 0.45 + 0.55 * lvl
+            color  = QColor(_REC_COLOR)
+            color.setAlphaF(alpha)
+
+            bar_path = QPainterPath()
+            bar_path.addRoundedRect(bar_x, bar_y, _BAR_W, bar_h, 1.5, 1.5)
+            p.fillPath(bar_path, QBrush(color))
+
+        # Label after waveform
+        label_x = cx_start + n * (_BAR_W + 2) + 6
+        font    = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        p.setFont(font)
+        p.setPen(QColor("#E8E8E8"))
+        fm  = QFontMetrics(font)
+        ty  = (h + fm.ascent() - fm.descent()) // 2
+        p.drawText(label_x, ty, "Запись...")
