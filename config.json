@@ -39,7 +39,7 @@
     "condition_on_previous_text": false,
     "without_timestamps": true,
     "vad_filter": true,
-    "initial_prompt": "Привет! Как дела? Какие у тебя планы на сегодня? Я работаю над проектом.",
+    "initial_prompt": "Напиши. Создай. Объясни. Сделай промпт. Как работает. Что такое. Помоги написать. React TypeScript Next.js ChatGPT OpenAI.",
     "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js, промпт, промпты",
     "language_detection_segments": 1
   },

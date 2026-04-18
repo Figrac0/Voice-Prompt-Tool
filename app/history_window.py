@@ -6,108 +6,112 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QObject, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QObject, QPoint, QTimer, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
-    QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+_MAX_ENTRIES = 5
+_W           = 360   # inner panel width
+_HEADER_H    = 44
+_ENTRY_H     = 62
+_SHADOW      = 14    # margin for drop-shadow
+
 
 def _fmt_ts(iso: str) -> str:
     try:
-        dt = datetime.fromisoformat(iso[:19])
-        now = datetime.now()
+        dt   = datetime.fromisoformat(iso[:19])
+        now  = datetime.now()
         diff = (now.date() - dt.date()).days
-        time = dt.strftime("%H:%M")
+        t    = dt.strftime("%H:%M")
         if diff == 0:
-            return f"сегодня, {time}"
+            return f"сегодня, {t}"
         if diff == 1:
-            return f"вчера, {time}"
-        months = ["янв", "фев", "мар", "апр", "май", "июн",
-                  "июл", "авг", "сен", "окт", "ноя", "дек"]
-        return f"{dt.day} {months[dt.month - 1]}, {time}"
+            return f"вчера, {t}"
+        months = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"]
+        return f"{dt.day} {months[dt.month - 1]}, {t}"
     except Exception:
         return iso[:16].replace("T", " ")
 
 
-def _pluralise(n: int) -> str:
-    if n % 10 == 1 and n % 100 != 11:
-        return f"{n} запись"
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
-        return f"{n} записи"
-    return f"{n} записей"
-
-
-class _EntryCard(QFrame):
+class _EntryRow(QWidget):
     def __init__(self, ts: str, text: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._text = text
+        self._text  = text
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._reset_btn)
 
-        self.setObjectName("card")
-        self.setStyleSheet(_CARD_STYLE)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(_ENTRY_H)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("QWidget { background: transparent; }")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(6)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(18, 10, 14, 10)
+        row.setSpacing(0)
 
-        # ── Header: timestamp + copy button ───────────────────────────────────
-        header = QHBoxLayout()
-        header.setSpacing(8)
+        # Text column
+        col = QVBoxLayout()
+        col.setSpacing(4)
 
         ts_lbl = QLabel(ts)
         ts_lbl.setFont(QFont("Segoe UI", 9))
-        ts_lbl.setStyleSheet("color:#636366; background:transparent;")
-        header.addWidget(ts_lbl)
-        header.addStretch()
+        ts_lbl.setStyleSheet("color:#4A4A4A; background:transparent;")
+        col.addWidget(ts_lbl)
 
-        self._copy_btn = QPushButton("Скопировать")
-        self._copy_btn.setFixedHeight(22)
-        self._copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._copy_btn.setStyleSheet(_COPY_BTN)
-        self._copy_btn.clicked.connect(self._copy)
-        header.addWidget(self._copy_btn)
-
-        layout.addLayout(header)
-
-        # ── Body text ─────────────────────────────────────────────────────────
-        body = QLabel(text)
-        body.setWordWrap(True)
+        body = QLabel()
         body.setFont(QFont("Segoe UI", 11))
-        body.setStyleSheet("color:#F2F2F7; background:transparent;")
-        body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(body)
+        body.setStyleSheet("color:#D0D0D0; background:transparent;")
+        # Elide long text
+        fm      = body.fontMetrics()
+        elided  = fm.elidedText(text, Qt.TextElideMode.ElideRight, 268)
+        body.setText(elided)
+        col.addWidget(body)
+
+        row.addLayout(col, stretch=1)
+
+        # Copy button
+        self._btn = QPushButton("⎘")
+        self._btn.setFixedSize(28, 28)
+        self._btn.setFont(QFont("Segoe UI", 13))
+        self._btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn.setStyleSheet(_BTN_COPY)
+        self._btn.clicked.connect(self._copy)
+        row.addWidget(self._btn, alignment=Qt.AlignmentFlag.AlignVCenter)
 
     def _copy(self) -> None:
         QApplication.clipboard().setText(self._text)
-        self._copy_btn.setText("Скопировано ✓")
-        self._copy_btn.setStyleSheet(_COPY_BTN_DONE)
-        QTimer.singleShot(1800, self._reset_btn)
+        self._btn.setText("✓")
+        self._btn.setStyleSheet(_BTN_COPY_DONE)
+        self._timer.start(1600)
 
     def _reset_btn(self) -> None:
-        self._copy_btn.setText("Скопировать")
-        self._copy_btn.setStyleSheet(_COPY_BTN)
+        self._btn.setText("⎘")
+        self._btn.setStyleSheet(_BTN_COPY)
 
     def mouseDoubleClickEvent(self, _event) -> None:  # noqa: N802
         self._copy()
 
+    def enterEvent(self, _event) -> None:  # noqa: N802
+        self.setStyleSheet("QWidget { background: #1C1C1C; }")
+
+    def leaveEvent(self, _event) -> None:  # noqa: N802
+        self.setStyleSheet("QWidget { background: transparent; }")
+
 
 class _Signals(QObject):
-    refresh = Signal()
+    refresh      = Signal()
+    state_update = Signal(object)   # AppState
 
 
 class HistoryWindow(QWidget):
-    """Floating history panel — shows past transcriptions as cards."""
-
     def __init__(
         self,
         history_file: Path,
@@ -115,103 +119,120 @@ class HistoryWindow(QWidget):
         hotkey: str,
         on_exit: Callable[[], None],
         logger: logging.Logger,
+        state_store=None,
     ) -> None:
-        super().__init__(None, Qt.WindowType.Window)
+        super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
         self._history_file = history_file
-        self._on_exit = on_exit
-        self._logger = logger
+        self._on_exit      = on_exit
+        self._logger       = logger
+        self._drag_pos: QPoint | None = None
 
-        self.setWindowTitle(app_name)
-        self.setMinimumSize(480, 540)
-        self.resize(520, 700)
-        self.setStyleSheet("QWidget { background:#1C1C1E; }")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        # ── Outer layout — provides shadow margin ──────────────────────────────
+        s = _SHADOW
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(s, s, s, s)
 
+        # ── Inner panel ────────────────────────────────────────────────────────
+        self._panel = QWidget(self)
+        self._panel.setObjectName("panel")
+        self._panel.setStyleSheet("""
+            QWidget#panel {
+                background: #111111;
+                border-radius: 12px;
+                border: 1px solid #242424;
+            }
+        """)
+        outer.addWidget(self._panel)
+
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setColor(QColor(0, 0, 0, 130))
+        shadow.setOffset(0, 8)
+        self._panel.setGraphicsEffect(shadow)
+
+        panel_vbox = QVBoxLayout(self._panel)
+        panel_vbox.setContentsMargins(0, 0, 0, 0)
+        panel_vbox.setSpacing(0)
+
+        # ── Header ─────────────────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(_HEADER_H)
+        header.setStyleSheet("background:transparent;")
+        header.setCursor(Qt.CursorShape.SizeAllCursor)
+        header.mousePressEvent = self._drag_press   # type: ignore[method-assign]
+        header.mouseMoveEvent  = self._drag_move    # type: ignore[method-assign]
+
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(16, 0, 12, 0)
+        hl.setSpacing(8)
+
+        self._dot = QLabel("●")
+        self._dot.setFont(QFont("Segoe UI", 7))
+        self._dot.setStyleSheet("color:#22C55E; background:transparent;")
+        hl.addWidget(self._dot)
+
+        title = QLabel("Voice Prompt")
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Medium))
+        title.setStyleSheet("color:#E0E0E0; background:transparent;")
+        hl.addWidget(title)
+        hl.addStretch()
+
+        hk = QLabel(hotkey.upper())
+        hk.setFont(QFont("Segoe UI", 9))
+        hk.setStyleSheet("color:#333; background:transparent;")
+        hl.addWidget(hk)
+
+        min_btn = QPushButton("—")
+        min_btn.setFixedSize(26, 26)
+        min_btn.setStyleSheet(_BTN_HEADER)
+        min_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        min_btn.clicked.connect(self.hide)
+        hl.addWidget(min_btn)
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(26, 26)
+        close_btn.setStyleSheet(_BTN_HEADER_CLOSE)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.clicked.connect(self._do_exit)
+        hl.addWidget(close_btn)
+
+        panel_vbox.addWidget(header)
+
+        # Divider below header
+        div = QWidget()
+        div.setFixedHeight(1)
+        div.setStyleSheet("background:#1E1E1E;")
+        panel_vbox.addWidget(div)
+
+        # ── Entries container ──────────────────────────────────────────────────
+        self._entries_host   = QWidget()
+        self._entries_host.setStyleSheet("background:transparent;")
+        self._entries_layout = QVBoxLayout(self._entries_host)
+        self._entries_layout.setContentsMargins(0, 0, 0, 0)
+        self._entries_layout.setSpacing(0)
+        panel_vbox.addWidget(self._entries_host)
+
+        # Position bottom-right, near tray
         screen = QApplication.primaryScreen().geometry()
         self.move(
-            (screen.width() - self.width()) // 2,
-            (screen.height() - self.height()) // 2,
+            screen.width()  - (_W + s * 2) - 20,
+            screen.height() - (_HEADER_H + _ENTRY_H * _MAX_ENTRIES + s * 2) - 80,
         )
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        # ── Top bar ───────────────────────────────────────────────────────────
-        topbar = QWidget()
-        topbar.setFixedHeight(58)
-        topbar.setStyleSheet("background:#2C2C2E; border-bottom:1px solid #38383A;")
-        tb = QHBoxLayout(topbar)
-        tb.setContentsMargins(20, 0, 20, 0)
-
-        icon_title = QLabel("🎤  Voice Prompt Tool")
-        icon_title.setFont(QFont("Segoe UI", 13, QFont.Weight.DemiBold))
-        icon_title.setStyleSheet("color:#F2F2F7; background:transparent;")
-        tb.addWidget(icon_title)
-        tb.addStretch()
-
-        self._count_lbl = QLabel("")
-        self._count_lbl.setFont(QFont("Segoe UI", 10))
-        self._count_lbl.setStyleSheet(
-            "color:#8E8E93; background:#3A3A3C; padding:3px 10px;"
-            " border-radius:10px;"
-        )
-        tb.addWidget(self._count_lbl)
-
-        root.addWidget(topbar)
-
-        # ── Scroll area with cards ─────────────────────────────────────────────
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet(_SCROLL_STYLE)
-
-        self._cards_host = QWidget()
-        self._cards_host.setStyleSheet("background:#1C1C1E;")
-        self._cards_layout = QVBoxLayout(self._cards_host)
-        self._cards_layout.setContentsMargins(16, 16, 16, 16)
-        self._cards_layout.setSpacing(8)
-        self._cards_layout.addStretch()
-
-        scroll.setWidget(self._cards_host)
-        root.addWidget(scroll, stretch=1)
-
-        # ── Bottom bar ────────────────────────────────────────────────────────
-        botbar = QWidget()
-        botbar.setFixedHeight(56)
-        botbar.setStyleSheet("background:#2C2C2E; border-top:1px solid #38383A;")
-        bb = QHBoxLayout(botbar)
-        bb.setContentsMargins(20, 0, 20, 0)
-        bb.setSpacing(10)
-
-        hotkey_chip = QLabel(hotkey.upper().replace("+", " + "))
-        hotkey_chip.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
-        hotkey_chip.setStyleSheet(
-            "color:#8E8E93; background:#3A3A3C; padding:4px 12px;"
-            " border-radius:6px;"
-        )
-        bb.addWidget(hotkey_chip)
-        bb.addStretch()
-
-        hide_btn = QPushButton("Свернуть")
-        hide_btn.setFixedSize(96, 34)
-        hide_btn.setStyleSheet(_BTN_SECONDARY)
-        hide_btn.clicked.connect(self.hide)
-        bb.addWidget(hide_btn)
-
-        exit_btn = QPushButton("Завершить")
-        exit_btn.setFixedSize(110, 34)
-        exit_btn.setStyleSheet(_BTN_DANGER)
-        exit_btn.clicked.connect(self._do_exit)
-        bb.addWidget(exit_btn)
-
-        root.addWidget(botbar)
-
-        # Thread-safe signal bridge
+        # Signals
         self._signals = _Signals(self)
-        self._signals.refresh.connect(self.reload)
+        self._signals.refresh.connect(self._reload)
+        self._signals.state_update.connect(self._on_state)
 
-        self.reload()
+        if state_store is not None:
+            state_store.register_listener(
+                lambda snap: self._signals.state_update.emit(snap.state)
+            )
+
+        self._reload()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -231,40 +252,65 @@ class HistoryWindow(QWidget):
         event.ignore()
         self.hide()
 
+    # ── Drag ──────────────────────────────────────────────────────────────────
+
+    def _drag_press(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def _drag_move(self, event) -> None:
+        if event.buttons() & Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+
     # ── Slots ──────────────────────────────────────────────────────────────────
 
-    def reload(self) -> None:
-        # Remove all cards (keep the trailing stretch)
-        while self._cards_layout.count() > 1:
-            item = self._cards_layout.takeAt(0)
+    def _on_state(self, state) -> None:
+        from app.state import AppState
+        colors = {
+            AppState.IDLE:         "#22C55E",
+            AppState.RECORDING:    "#EF4444",
+            AppState.TRANSCRIBING: "#F59E0B",
+            AppState.ERROR:        "#555555",
+        }
+        self._dot.setStyleSheet(f"color:{colors.get(state, '#22C55E')}; background:transparent;")
+
+    def _reload(self) -> None:
+        while self._entries_layout.count():
+            item = self._entries_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        entries = self._load_entries()
+        entries = self._load_entries()[-_MAX_ENTRIES:]
 
+        n = 0
         if not entries:
-            empty = QLabel("Записей пока нет.\n\nЗажмите горячую клавишу и начните говорить.")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setFont(QFont("Segoe UI", 12))
-            empty.setStyleSheet("color:#48484A; background:transparent;")
-            self._cards_layout.insertWidget(0, empty)
-            self._count_lbl.setText("нет записей")
-            return
+            lbl = QLabel("Записей пока нет.\nЗажмите горячую клавишу и говорите.")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setFont(QFont("Segoe UI", 11))
+            lbl.setStyleSheet("color:#2E2E2E; background:transparent; padding:28px;")
+            self._entries_layout.addWidget(lbl)
+        else:
+            for i, entry in enumerate(reversed(entries)):
+                ts   = _fmt_ts(entry.get("created_at", ""))
+                text = entry.get("cleaned_text") or entry.get("raw_text") or ""
+                if not text:
+                    continue
+                self._entries_layout.addWidget(_EntryRow(ts, text))
+                n += 1
+                if i < len(entries) - 1:
+                    sep = QWidget()
+                    sep.setFixedHeight(1)
+                    sep.setStyleSheet("background:#191919;")
+                    self._entries_layout.addWidget(sep)
 
-        self._count_lbl.setText(_pluralise(len(entries)))
-
-        for entry in reversed(entries):
-            ts   = _fmt_ts(entry.get("created_at", ""))
-            text = entry.get("cleaned_text") or entry.get("raw_text") or ""
-            if not text:
-                continue
-            card = _EntryCard(ts, text)
-            self._cards_layout.insertWidget(0, card)
-
-    # ── Helpers ────────────────────────────────────────────────────────────────
+        # Resize panel to fit content
+        s          = _SHADOW
+        content_h  = 80 if n == 0 else (n * _ENTRY_H + max(0, n - 1))
+        inner_h    = _HEADER_H + 1 + content_h
+        self.setFixedSize(_W + s * 2, inner_h + s * 2)
 
     def _do_exit(self) -> None:
-        self._logger.info("Exit requested from history window.")
+        self._logger.info("Exit from history window.")
         self._on_exit()
         QApplication.quit()
 
@@ -276,88 +322,53 @@ class HistoryWindow(QWidget):
                 data = json.load(f)
             return data.get("entries", []) if isinstance(data, dict) else []
         except Exception:
-            self._logger.exception("Failed to load history.")
             return []
 
 
 # ── Styles ─────────────────────────────────────────────────────────────────────
 
-_CARD_STYLE = """
-QFrame#card {
-    background: #2C2C2E;
-    border: 1px solid #38383A;
-    border-radius: 10px;
+_BTN_COPY = """
+QPushButton {
+    background: transparent;
+    color: #363636;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
 }
-QFrame#card:hover {
-    background: #323234;
-    border-color: #48484A;
+QPushButton:hover {
+    background: #222222;
+    color: #BBBBBB;
 }
 """
 
-_COPY_BTN = """
+_BTN_COPY_DONE = """
 QPushButton {
-    background: #3A3A3C;
-    color: #8E8E93;
+    background: #132318;
+    color: #22C55E;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+}
+"""
+
+_BTN_HEADER = """
+QPushButton {
+    background: transparent;
+    color: #3A3A3A;
     border: none;
     border-radius: 5px;
-    padding: 0 10px;
-    font-size: 11px;
-    font-family: 'Segoe UI';
+    font-size: 13px;
 }
-QPushButton:hover { background: #48484A; color: #EBEBF5; }
+QPushButton:hover { background: #222222; color: #888888; }
 """
 
-_COPY_BTN_DONE = """
+_BTN_HEADER_CLOSE = """
 QPushButton {
-    background: #1C3A25;
-    color: #30D158;
+    background: transparent;
+    color: #3A3A3A;
     border: none;
     border-radius: 5px;
-    padding: 0 10px;
     font-size: 11px;
-    font-family: 'Segoe UI';
 }
-"""
-
-_SCROLL_STYLE = """
-QScrollArea { border: none; background: #1C1C1E; }
-QScrollBar:vertical {
-    background: #2C2C2E;
-    width: 5px;
-    border-radius: 3px;
-    margin: 0;
-}
-QScrollBar::handle:vertical {
-    background: #48484A;
-    border-radius: 3px;
-    min-height: 30px;
-}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-"""
-
-_BTN_SECONDARY = """
-QPushButton {
-    background: #3A3A3C;
-    color: #EBEBF5;
-    border: none;
-    border-radius: 8px;
-    font-size: 13px;
-    font-family: 'Segoe UI';
-}
-QPushButton:hover { background: #48484A; }
-QPushButton:pressed { background: #2C2C2E; }
-"""
-
-_BTN_DANGER = """
-QPushButton {
-    background: #2A1515;
-    color: #FF453A;
-    border: 1px solid #FF453A44;
-    border-radius: 8px;
-    font-size: 13px;
-    font-family: 'Segoe UI';
-}
-QPushButton:hover { background: #FF453A; color: #FFF; border-color: #FF453A; }
-QPushButton:pressed { background: #C0392B; color: #FFF; }
+QPushButton:hover { background: #3D1515; color: #EF4444; }
 """

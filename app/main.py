@@ -96,6 +96,7 @@ def main() -> None:
             hotkey=config.hotkey.combination,
             on_exit=lambda: _stop_runtime(),
             logger=logger,
+            state_store=state_store,
         )
 
         # ── Overlay ───────────────────────────────────────────────────────────

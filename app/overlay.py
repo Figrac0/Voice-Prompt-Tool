@@ -212,29 +212,35 @@ class RecordingOverlay(QWidget):
             p.end()
 
     def _paint_idle_dot(self, p: QPainter, left_pad: int, h: int) -> None:
+        transcribing = self._state == AppState.TRANSCRIBING
+
+        dot_color = "#F59E0B" if transcribing else _IDLE_DOT
+        label     = "Обработка..." if transcribing else "Voice Prompt"
+        label_color = "#C8922A" if transcribing else "#8E8E93"
+
         dot_r  = 5
         dot_cx = left_pad
         dot_cy = h // 2
 
         # Glow
-        glow = QColor(_IDLE_DOT)
-        glow.setAlphaF(0.20)
+        glow = QColor(dot_color)
+        glow.setAlphaF(0.22)
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(glow))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r + 5, dot_r + 5)
 
         # Dot
-        p.setBrush(QBrush(QColor(_IDLE_DOT)))
+        p.setBrush(QBrush(QColor(dot_color)))
         p.drawEllipse(QPoint(dot_cx, dot_cy), dot_r, dot_r)
 
         # Label
         font = QFont("Segoe UI", 10, QFont.Weight.Medium)
         p.setFont(font)
-        p.setPen(QColor("#8E8E93"))
+        p.setPen(QColor(label_color))
         fm = QFontMetrics(font)
         tx = dot_cx + dot_r + 9
         ty = (h + fm.ascent() - fm.descent()) // 2
-        p.drawText(tx, ty, "Voice Prompt")
+        p.drawText(tx, ty, label)
 
     def _paint_waveform(self, p: QPainter, left_pad: int, h: int) -> None:
         levels = list(self._levels)
