@@ -16,25 +16,25 @@ The floating overlay widget is always visible in the corner of your screen. It s
 
 ## Features
 
-| Feature | Detail |
-|---------|--------|
+| Feature             | Detail                                                                |
+| ------------------- | --------------------------------------------------------------------- |
 | Cloud transcription | Groq API with Whisper Large v3 Turbo — typically 0.2–0.5 s round-trip |
-| Local fallback | `faster-whisper` runs on-device if no API key is provided |
-| Floating overlay | Draggable pill widget; no taskbar entry; stays on top |
-| Expandable history | Click the pill to reveal the last 5 transcriptions inline |
-| Auto-inject | Text is typed via `pynput` keyboard emulation into the focused window |
-| Clipboard sync | Every transcription is also written to the clipboard |
-| System tray | Right-click for status, settings, history, and quit |
-| Silent launch | `run.bat` starts the app with no console window via `pythonw.exe` |
-| Single instance | A lock file prevents duplicate processes |
+| Local fallback      | `faster-whisper` runs on-device if no API key is provided             |
+| Floating overlay    | Draggable pill widget; no taskbar entry; stays on top                 |
+| Expandable history  | Click the pill to reveal the last 5 transcriptions inline             |
+| Auto-inject         | Text is typed via `pynput` keyboard emulation into the focused window |
+| Clipboard sync      | Every transcription is also written to the clipboard                  |
+| System tray         | Right-click for status, settings, history, and quit                   |
+| Silent launch       | `run.bat` starts the app with no console window via `pythonw.exe`     |
+| Single instance     | A lock file prevents duplicate processes                              |
 
 ---
 
 ## Requirements
 
 - **OS:** Windows 10 or 11
-- **Python:** 3.10 or newer — download from [python.org](https://www.python.org/downloads/) and tick *"Add python.exe to PATH"* during installation
-- **Groq API key** *(optional, but strongly recommended)* — free tier available at [console.groq.com](https://console.groq.com)
+- **Python:** 3.10 or newer — download from [python.org](https://www.python.org/downloads/) and tick _"Add python.exe to PATH"_ during installation
+- **Groq API key** _(optional, but strongly recommended)_ — free tier available at [console.groq.com](https://console.groq.com)
 
 ---
 
@@ -49,7 +49,7 @@ cd voice-prompt-tool
 
 Or download and extract the ZIP.
 
-### 2. Configure your API key *(optional)*
+### 2. Configure your API key _(optional)_
 
 Create a file named `.env` in the project root:
 
@@ -93,15 +93,15 @@ Every subsequent launch skips setup and starts immediately.
 
 The pill-shaped overlay sits in the bottom-right corner of the screen.
 
-| Interaction | Result |
-|-------------|--------|
-| Hold **Ctrl + Shift** | Recording starts — animated waveform |
+| Interaction              | Result                                                          |
+| ------------------------ | --------------------------------------------------------------- |
+| Hold **Ctrl + Shift**    | Recording starts — animated waveform                            |
 | Release **Ctrl + Shift** | Transcription runs — amber indicator — text is typed and copied |
-| **Click** the pill | Expand to show last 5 transcriptions + action buttons |
-| **Drag** the pill | Reposition anywhere on screen |
-| **Свернуть** button | Collapse the history back to the pill |
-| **Закрыть** button | Quit the application |
-| **⎘** on any entry | Copy that transcription to the clipboard |
+| **Click** the pill       | Expand to show last 5 transcriptions + action buttons           |
+| **Drag** the pill        | Reposition anywhere on screen                                   |
+| **Свернуть** button      | Collapse the history back to the pill                           |
+| **Закрыть** button       | Quit the application                                            |
+| **⎘** on any entry       | Copy that transcription to the clipboard                        |
 
 ### System tray
 
@@ -119,33 +119,33 @@ Right-click the tray icon (bottom-right of the taskbar) for the context menu:
 
 ```json
 {
-  "hotkey": {
-    "combination": "ctrl+shift"
-  },
-  "transcription": {
-    "model_size": "small",
-    "language_mode": "ru"
-  },
-  "groq": {
-    "enabled": true,
-    "api_key": "",
-    "model": "whisper-large-v3-turbo"
-  },
-  "overlay": {
-    "enabled": true,
-    "margin": 12
-  }
+    "hotkey": {
+        "combination": "ctrl+shift"
+    },
+    "transcription": {
+        "model_size": "small",
+        "language_mode": "ru"
+    },
+    "groq": {
+        "enabled": true,
+        "api_key": "",
+        "model": "whisper-large-v3-turbo"
+    },
+    "overlay": {
+        "enabled": true,
+        "margin": 12
+    }
 }
 ```
 
-| Key | Accepted values | Description |
-|-----|----------------|-------------|
-| `hotkey.combination` | e.g. `ctrl+shift`, `ctrl+alt+space` | Push-to-talk key combination |
-| `transcription.language_mode` | `"ru"` · `"en"` · `"auto"` | Explicit language is faster and more accurate than auto-detection |
-| `transcription.model_size` | `"tiny"` · `"base"` · `"small"` · `"medium"` | Local model size (ignored when Groq is enabled) |
-| `groq.enabled` | `true` · `false` | `true` = Groq cloud; `false` = local faster-whisper |
-| `overlay.enabled` | `true` · `false` | Show or hide the floating pill widget |
-| `overlay.margin` | integer (px) | Distance from screen edge |
+| Key                           | Accepted values                              | Description                                                       |
+| ----------------------------- | -------------------------------------------- | ----------------------------------------------------------------- |
+| `hotkey.combination`          | e.g. `ctrl+shift`, `ctrl+alt+space`          | Push-to-talk key combination                                      |
+| `transcription.language_mode` | `"ru"` · `"en"` · `"auto"`                   | Explicit language is faster and more accurate than auto-detection |
+| `transcription.model_size`    | `"tiny"` · `"base"` · `"small"` · `"medium"` | Local model size (ignored when Groq is enabled)                   |
+| `groq.enabled`                | `true` · `false`                             | `true` = Groq cloud; `false` = local faster-whisper               |
+| `overlay.enabled`             | `true` · `false`                             | Show or hide the floating pill widget                             |
+| `overlay.margin`              | integer (px)                                 | Distance from screen edge                                         |
 
 The `GROQ_API_KEY` environment variable (set in `.env`) takes precedence over an empty `groq.api_key` in `config.json`.
 
@@ -196,17 +196,11 @@ Voice-Prompt/
 
 ## Troubleshooting
 
-| Symptom | Resolution |
-|---------|-----------|
-| Nothing happens on hotkey | Another process may own the combination globally. Check `logs/` for `HotkeyRegistrationError`. Try changing `hotkey.combination` in `config.json`. |
-| Text is transcribed in the wrong language | Set `transcription.language_mode` explicitly rather than `"auto"`. |
-| Garbled or missing words | Set the Windows default recording device to your microphone. Add relevant vocabulary to `initial_prompt`. |
-| App does not start after moving to a new machine | Delete the `.venv/` folder and re-run `run.bat` — it will rebuild the environment from scratch. |
-| Groq returns errors | Verify `.env` contains a valid `GROQ_API_KEY`. The app falls back to the local model automatically if Groq fails. |
-| High CPU after launch | The local model is warming up in a background thread — this is normal for ~10–30 s after startup. Use Groq to avoid it entirely. |
-
----
-
-## License
-
-MIT
+| Symptom                                          | Resolution                                                                                                                                         |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nothing happens on hotkey                        | Another process may own the combination globally. Check `logs/` for `HotkeyRegistrationError`. Try changing `hotkey.combination` in `config.json`. |
+| Text is transcribed in the wrong language        | Set `transcription.language_mode` explicitly rather than `"auto"`.                                                                                 |
+| Garbled or missing words                         | Set the Windows default recording device to your microphone. Add relevant vocabulary to `initial_prompt`.                                          |
+| App does not start after moving to a new machine | Delete the `.venv/` folder and re-run `run.bat` — it will rebuild the environment from scratch.                                                    |
+| Groq returns errors                              | Verify `.env` contains a valid `GROQ_API_KEY`. The app falls back to the local model automatically if Groq fails.                                  |
+| High CPU after launch                            | The local model is warming up in a background thread — this is normal for ~10–30 s after startup. Use Groq to avoid it entirely.                   |
