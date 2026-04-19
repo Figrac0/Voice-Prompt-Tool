@@ -1,0 +1,88 @@
+{
+  "app_name": "Voice Prompt Tool",
+  "log_level": "INFO",
+  "history_limit": 100,
+  "paths": {
+    "logs_dir": "logs",
+    "history_file": "data/history.json",
+    "temp_dir": "temp",
+    "models_dir": "models"
+  },
+  "tray": {
+    "tooltip": "Voice Prompt Tool",
+    "startup_notification": false
+  },
+  "notifications": {
+    "enabled": false,
+    "backend": "log"
+  },
+  "hotkey": {
+    "combination": "ctrl+shift"
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "block_frames": 1024,
+    "max_record_seconds": 120,
+    "min_duration_seconds": 0.35,
+    "stale_temp_file_age_hours": 24,
+    "file_prefix": "recording"
+  },
+  "transcription": {
+    "model_size": "small",
+    "language_mode": "ru",
+    "device": "auto",
+    "compute_type": "int8",
+    "cpu_threads": 4,
+    "beam_size": 2,
+    "best_of": 1,
+    "condition_on_previous_text": false,
+    "without_timestamps": true,
+    "vad_filter": true,
+    "initial_prompt": "Голосовая диктовка на русском языке. Чёткая речь без слов-паразитов. Грамотная пунктуация: точки, запятые, вопросительные знаки. Технические термины: ChatGPT, OpenAI, React, TypeScript, Next.js, Python, GitHub, промпт.",
+    "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js, промпт, промпты",
+    "language_detection_segments": 1
+  },
+  "live_preview": {
+    "enabled": false,
+    "model_size": "base",
+    "language_mode": "ru",
+    "device": "auto",
+    "compute_type": "int8",
+    "beam_size": 1,
+    "best_of": 1,
+    "condition_on_previous_text": false,
+    "without_timestamps": true,
+    "vad_filter": true,
+    "update_interval_seconds": 0.6,
+    "min_audio_seconds": 0.7,
+    "max_preview_window_seconds": 10.0
+  },
+  "text_postprocess": {
+    "auto_copy": true,
+    "auto_paste": true,
+    "custom_replacements": {
+      "чат gpt": "ChatGPT",
+      "опен эй ай": "OpenAI",
+      "реакт": "React",
+      "тайпскрипт": "TypeScript",
+      "некст джей эс": "Next.js"
+    }
+  },
+  "groq": {
+    "enabled": true,
+    "api_key": "",
+    "model": "whisper-large-v3-turbo"
+  },
+  "overlay": {
+    "enabled": true,
+    "size": 28,
+    "margin": 20,
+    "idle_alpha": 0.01,
+    "recording_alpha": 0.95,
+    "transcribing_alpha": 0.85,
+    "idle_color": "#FFFFFF",
+    "recording_color": "#2BFF59",
+    "transcribing_color": "#FF9F0A"
+  }
+}
