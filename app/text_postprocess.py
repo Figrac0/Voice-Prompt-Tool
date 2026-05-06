@@ -43,10 +43,19 @@ class TextPostprocessor:
     # Only strip a trailing standalone «ю» — never touch «ю» inside the text.
     _whisper_yu_end = re.compile(r"\s+ю\s*$")
 
+    # Remove trailing «ю» or «б» that Whisper adds at the end of words
+    _whisper_trailing_artifacts = re.compile(r"([а-яёa-z]+)[юб]\b", re.IGNORECASE)
+
     # Conservative list of Russian filler sounds that Whisper sometimes
     # transcribes literally but that carry no meaning.
     _filler_pattern = re.compile(
         r"\b(эм|э-э|ааа+|аа|ммм+|мм|кхм|нуу+|угу|ага\s+ага)\b[,.]?\s*",
+        flags=re.IGNORECASE,
+    )
+
+    # Block the hallucinated phrase "Продолжение следует" completely
+    _continuation_phrase = re.compile(
+        r"\b(продолжение\s+следует|continuation\s+follows)\b[.,]?\s*",
         flags=re.IGNORECASE,
     )
     _question_leads = (
@@ -101,7 +110,9 @@ class TextPostprocessor:
 
         cleaned_text = raw_text.strip()
         cleaned_text = self._normalize_whitespace(cleaned_text)
+        cleaned_text = self._remove_continuation_phrase(cleaned_text)
         cleaned_text = self._remove_whisper_artifacts(cleaned_text)
+        cleaned_text = self._remove_trailing_artifacts(cleaned_text)
         cleaned_text = self._remove_fillers(cleaned_text)
         cleaned_text = self._normalize_punctuation(cleaned_text)
         cleaned_text, applied_replacements = self._apply_custom_replacements(cleaned_text)
@@ -133,6 +144,22 @@ class TextPostprocessor:
     def _remove_whisper_artifacts(self, text: str) -> str:
         """Strip trailing standalone «ю» that Whisper adds instead of a period."""
         return self._whisper_yu_end.sub("", text).strip()
+
+    def _remove_continuation_phrase(self, text: str) -> str:
+        """Remove the hallucinated phrase 'Продолжение следует' completely."""
+        return self._continuation_phrase.sub("", text).strip()
+
+    def _remove_trailing_artifacts(self, text: str) -> str:
+        """Remove trailing «ю» or «б» that Whisper incorrectly adds at the end of words."""
+        # Only remove if the word would still be valid without the trailing letter
+        def replace_trailing(match):
+            word = match.group(1)
+            # Keep the trailing letter if the word is too short (likely legitimate)
+            if len(word) < 3:
+                return match.group(0)
+            return word
+
+        return self._whisper_trailing_artifacts.sub(replace_trailing, text).strip()
 
     def _remove_fillers(self, text: str) -> str:
         """Remove transcribed filler sounds (эм, ааа, ммм, кхм …)."""

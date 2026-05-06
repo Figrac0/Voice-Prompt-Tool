@@ -64,6 +64,7 @@ class GroqTranscriber:
                     temperature=0.0,
                 )
         except Exception as exc:
+            self._logger.error("Groq API error: %s", str(exc))
             raise TranscriberError(f"Groq transcription failed for '{audio_path}'.") from exc
 
         duration_seconds = time.perf_counter() - started_at
@@ -83,6 +84,13 @@ class GroqTranscriber:
             if segments
             else (getattr(response, "text", "") or "").strip()
         )
+
+        # Detect suspicious transcription (gibberish with numbers/slashes)
+        if self._is_suspicious_transcript(transcript_text):
+            self._logger.warning(
+                "Suspicious transcript detected (possible API error or corrupted audio) | text=%s",
+                transcript_text
+            )
 
         detected_language = getattr(response, "language", None)
         audio_duration = getattr(response, "duration", None)
@@ -107,3 +115,22 @@ class GroqTranscriber:
             transcript_text,
         )
         return result
+
+    @staticmethod
+    def _is_suspicious_transcript(text: str) -> bool:
+        """Detect gibberish patterns like '323/13dq/23213lfcadld'."""
+        import re
+        if not text or len(text) < 5:
+            return False
+
+        # Check for excessive numbers mixed with random letters and slashes
+        suspicious_pattern = re.compile(r'[\d/]{3,}|[a-z]{2}\d{2,}|[\d/a-z]{10,}', re.IGNORECASE)
+        matches = suspicious_pattern.findall(text)
+
+        # If more than 30% of text is suspicious patterns, flag it
+        if matches:
+            suspicious_length = sum(len(m) for m in matches)
+            if suspicious_length / len(text) > 0.3:
+                return True
+
+        return False

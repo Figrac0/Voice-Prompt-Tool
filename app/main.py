@@ -60,6 +60,25 @@ def _clipboard_set(text: str) -> None:
         ctypes.windll.user32.CloseClipboard()
 
 
+def _is_gibberish(text: str) -> bool:
+    """Detect gibberish patterns like '323/13dq/23213lfcadld'."""
+    import re
+    if not text or len(text) < 5:
+        return False
+
+    # Check for excessive numbers mixed with random letters and slashes
+    suspicious_pattern = re.compile(r'[\d/]{3,}|[a-z]{2}\d{2,}|[\d/a-z]{10,}', re.IGNORECASE)
+    matches = suspicious_pattern.findall(text)
+
+    # If more than 30% of text is suspicious patterns, flag it
+    if matches:
+        suspicious_length = sum(len(m) for m in matches)
+        if suspicious_length / len(text) > 0.3:
+            return True
+
+    return False
+
+
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("Voice Prompt Tool supports Windows only.")
@@ -192,6 +211,7 @@ def main() -> None:
 
             if result.ignored:
                 state_store.finish_recording("Recording too short.")
+                logger.info("Recording ignored: %s", result.reason)
                 return True
 
             artifact = result.artifact
@@ -211,7 +231,28 @@ def main() -> None:
 
             state_store.finish_transcribing("Done.")
 
+            # Check if text is empty or contains only punctuation/whitespace
             if final_text:
+                # Remove all punctuation and whitespace to check if there's actual content
+                text_without_punctuation = ''.join(c for c in final_text if c.isalnum())
+
+                if not text_without_punctuation:
+                    logger.info("Empty or punctuation-only transcript ignored: %s", final_text)
+                    state_store.finish_recording("No speech detected.")
+                    return True
+
+                # Block "Продолжение следует" phrase completely
+                if "продолжение следует" in final_text.lower() or "continuation follows" in final_text.lower():
+                    logger.warning("Blocked hallucinated phrase: %s", final_text)
+                    state_store.finish_recording("Hallucinated phrase blocked.")
+                    return True
+
+                # Filter out suspicious gibberish transcriptions
+                if _is_gibberish(final_text):
+                    logger.warning("Gibberish transcript filtered out: %s", final_text)
+                    state_store.finish_recording("Invalid transcription.")
+                    return True
+
                 try:
                     text_injector._controller.type(final_text)
                 except Exception:

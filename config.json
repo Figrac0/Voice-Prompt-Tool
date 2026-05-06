@@ -24,7 +24,7 @@
     "channels": 1,
     "block_frames": 1024,
     "max_record_seconds": 120,
-    "min_duration_seconds": 0.35,
+    "min_duration_seconds": 0.8,
     "stale_temp_file_age_hours": 24,
     "file_prefix": "recording"
   },
@@ -39,7 +39,7 @@
     "condition_on_previous_text": false,
     "without_timestamps": true,
     "vad_filter": true,
-    "initial_prompt": "Голосовая диктовка на русском языке. Чёткая речь без слов-паразитов. Грамотная пунктуация: точки, запятые, вопросительные знаки. Технические термины: ChatGPT, OpenAI, React, TypeScript, Next.js, Python, GitHub, промпт.",
+    "initial_prompt": "Голосовая диктовка на русском языке. Транскрибируй только то, что реально сказано в аудио. Если в аудио тишина или нет речи - верни пустую строку. Не добавляй фразы типа 'Продолжение следует' или другие выдуманные слова. Грамотная пунктуация: точки, запятые, вопросительные знаки. Технические термины: ChatGPT, OpenAI, React, TypeScript, Next.js, Python, GitHub, промпт.",
     "hotwords": "ChatGPT, OpenAI, React, TypeScript, Next.js, промпт, промпты",
     "language_detection_segments": 1
   },
