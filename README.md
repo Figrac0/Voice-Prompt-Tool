@@ -4,6 +4,18 @@ A lightweight Windows voice-to-text utility that transcribes speech and immediat
 
 ---
 
+<div align="center">
+  
+| 1 |
+| :---: |
+| <img src="https://github.com/Figrac0/Voice-Prompt-Tool/blob/V3/assets/img/1.png" width="300"/> |
+
+|                                               2                                                |
+| :--------------------------------------------------------------------------------------------: |
+| <img src="https://github.com/Figrac0/Voice-Prompt-Tool/blob/V3/assets/img/2.png" width="400"/> |
+
+</div>
+
 ## How it works
 
 1. Click into any text field — browser address bar, IDE, chat, anything.
