@@ -28,6 +28,7 @@ class GroqTranscriber:
         self._logger = logger
         self._client = None
         self._last_result: TranscriptionResult | None = None
+        self._timeout = 30.0  # 30 seconds timeout for API calls
 
     @property
     def last_result(self) -> TranscriptionResult | None:
@@ -36,8 +37,8 @@ class GroqTranscriber:
     def load_model(self) -> None:
         try:
             from groq import Groq
-            self._client = Groq(api_key=self._api_key)
-            self._logger.info("Groq client ready | model=%s | language=%s", self._model, self._language or "auto")
+            self._client = Groq(api_key=self._api_key, timeout=self._timeout)
+            self._logger.info("Groq client ready | model=%s | language=%s | timeout=%ss", self._model, self._language or "auto", self._timeout)
         except Exception as exc:
             raise TranscriberError("Failed to initialise Groq client.") from exc
 
@@ -51,7 +52,7 @@ class GroqTranscriber:
             raise TranscriberError(f"Audio file is empty: '{audio_path}'.")
 
         started_at = time.perf_counter()
-        self._logger.info("Groq transcription started | audio=%s | model=%s", audio_path, self._model)
+        self._logger.info("Groq transcription started | audio=%s | model=%s | timeout=%ss", audio_path, self._model, self._timeout)
 
         try:
             with audio_path.open("rb") as f:
@@ -63,6 +64,9 @@ class GroqTranscriber:
                     prompt=self._initial_prompt or None,
                     temperature=0.0,
                 )
+        except TimeoutError as exc:
+            self._logger.error("Groq API timeout after %ss: %s", self._timeout, str(exc))
+            raise TranscriberError(f"Groq transcription timed out after {self._timeout}s for '{audio_path}'.") from exc
         except Exception as exc:
             self._logger.error("Groq API error: %s", str(exc))
             raise TranscriberError(f"Groq transcription failed for '{audio_path}'.") from exc

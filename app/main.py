@@ -218,6 +218,8 @@ def main() -> None:
             state_store.start_transcribing("Transcribing...")
 
             final_text = ""
+            transcription_failed = False
+
             try:
                 if artifact:
                     tr   = transcriber.transcribe(artifact.file_path)
@@ -225,58 +227,66 @@ def main() -> None:
                     final_text = proc.cleaned_text.strip()
             except Exception:
                 logger.exception("Transcription failed.")
+                transcription_failed = True
             finally:
                 if artifact:
                     audio_recorder.delete_recording_file(artifact.file_path)
 
+            # Always return to IDLE state after transcription attempt
             state_store.finish_transcribing("Done.")
 
+            # If transcription failed, return early
+            if transcription_failed:
+                logger.warning("Transcription error - returning to idle state")
+                return True
+
             # Check if text is empty or contains only punctuation/whitespace
-            if final_text:
-                # Remove all punctuation and whitespace to check if there's actual content
-                text_without_punctuation = ''.join(c for c in final_text if c.isalnum())
+            if not final_text:
+                logger.info("Empty transcript - no text to process")
+                return True
 
-                if not text_without_punctuation:
-                    logger.info("Empty or punctuation-only transcript ignored: %s", final_text)
-                    state_store.finish_recording("No speech detected.")
-                    return True
+            # Remove all punctuation and whitespace to check if there's actual content
+            text_without_punctuation = ''.join(c for c in final_text if c.isalnum())
 
-                # Block "Продолжение следует" phrase completely
-                if "продолжение следует" in final_text.lower() or "continuation follows" in final_text.lower():
-                    logger.warning("Blocked hallucinated phrase: %s", final_text)
-                    state_store.finish_recording("Hallucinated phrase blocked.")
-                    return True
+            if not text_without_punctuation:
+                logger.info("Empty or punctuation-only transcript ignored: %s", final_text)
+                return True
 
-                # Filter out suspicious gibberish transcriptions
-                if _is_gibberish(final_text):
-                    logger.warning("Gibberish transcript filtered out: %s", final_text)
-                    state_store.finish_recording("Invalid transcription.")
-                    return True
+            # Block "Продолжение следует" phrase completely
+            if "продолжение следует" in final_text.lower() or "continuation follows" in final_text.lower():
+                logger.warning("Blocked hallucinated phrase: %s", final_text)
+                return True
 
-                try:
-                    text_injector._controller.type(final_text)
-                except Exception:
-                    logger.exception("Text injection failed.")
+            # Filter out suspicious gibberish transcriptions
+            if _is_gibberish(final_text):
+                logger.warning("Gibberish transcript filtered out: %s", final_text)
+                return True
 
-                try:
-                    _clipboard_set(final_text)
-                except Exception:
-                    logger.exception("Clipboard copy failed.")
+            # Text is valid - inject and save
+            try:
+                text_injector._controller.type(final_text)
+            except Exception:
+                logger.exception("Text injection failed.")
 
-                tray_app.set_last_transcript_preview(final_text)
-                try:
-                    entry = history_service.build_entry(
-                        raw_text=final_text,
-                        cleaned_text=final_text,
-                        language_mode=config.transcription.language_mode,
-                        recording_duration_seconds=artifact.duration_seconds if artifact else 0.0,
-                    )
-                    history_service.append_entry(entry)
-                except Exception:
-                    logger.exception("History write failed.")
-                overlay.notify_new_entry()
+            try:
+                _clipboard_set(final_text)
+            except Exception:
+                logger.exception("Clipboard copy failed.")
 
-                logger.info("Transcript: %s", final_text)
+            tray_app.set_last_transcript_preview(final_text)
+            try:
+                entry = history_service.build_entry(
+                    raw_text=final_text,
+                    cleaned_text=final_text,
+                    language_mode=config.transcription.language_mode,
+                    recording_duration_seconds=artifact.duration_seconds if artifact else 0.0,
+                )
+                history_service.append_entry(entry)
+            except Exception:
+                logger.exception("History write failed.")
+            overlay.notify_new_entry()
+
+            logger.info("Transcript: %s", final_text)
 
             return True
 
